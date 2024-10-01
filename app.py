@@ -1,130 +1,145 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import LabelEncoder
 import plotly.graph_objects as go
+import random
 
-# ฟังก์ชันสำหรับสร้างโมเดล
-@st.cache_resource
-def create_model():
-    data = pd.DataFrame({
-        'security_level': ['Low', 'Medium', 'High'] * 100,
-        'identify': np.random.randint(1, 6, 300),
-        'protect': np.random.randint(1, 6, 300),
-        'detect': np.random.randint(1, 6, 300),
-        'respond': np.random.randint(1, 6, 300),
-        'recover': np.random.randint(1, 6, 300),
-        'govern': np.random.randint(1, 6, 300),
-        'vulnerabilities': np.random.randint(0, 100, 300),
-        'incidents': np.random.randint(0, 50, 300)
-    })
-    
-    le = LabelEncoder()
-    data['security_level'] = le.fit_transform(data['security_level'])
-    
-    X = data.drop('security_level', axis=1)
-    y = data['security_level']
-    
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X, y)
-    
-    return model, le
-
-# ฟังก์ชันสำหรับจำลองการโจมตี
-def simulate_attack(attack_type, severity):
-    impact = {
-        'identify': max(-1, -np.random.randint(0, 2)),
-        'protect': max(-1, -np.random.randint(0, 2)),
-        'detect': max(-1, -np.random.randint(0, 2)),
-        'respond': max(-1, -np.random.randint(0, 2)),
-        'recover': max(-1, -np.random.randint(0, 2)),
-        'govern': max(-1, -np.random.randint(0, 2)),
-        'vulnerabilities': np.random.randint(5, 20) * severity,
-        'incidents': np.random.randint(1, 5) * severity
+# ฟังก์ชันสำหรับคำนวณคะแนน NIST CSF
+def calculate_nist_score(metrics):
+    weights = {
+        'identify': 0.2, 'protect': 0.2, 'detect': 0.2,
+        'respond': 0.15, 'recover': 0.15, 'govern': 0.1
     }
-    return impact
+    return sum(metrics[func] * weight for func, weight in weights.items()) * 20
 
-# สร้างโมเดลและโหลดข้อมูลที่จำเป็น
-model, le = create_model()
+# ฟังก์ชันสำหรับให้คำแนะนำ
+def get_recommendations(security_level):
+    recommendations = {
+        'Low': [
+            "Improve asset management and risk assessment processes.",
+            "Enhance access control and implement regular security awareness training.",
+            "Implement continuous monitoring and improve anomaly detection capabilities."
+        ],
+        'Medium': [
+            "Refine risk assessment methodologies and update asset inventory regularly.",
+            "Strengthen data protection measures and enhance network segmentation.",
+            "Improve threat intelligence capabilities and implement advanced security analytics."
+        ],
+        'High': [
+            "Implement advanced risk modeling and expand supply chain risk management.",
+            "Adopt zero trust architecture and implement advanced encryption techniques.",
+            "Implement AI-driven threat detection and expand threat hunting capabilities."
+        ]
+    }
+    return recommendations[security_level]
+
+# ฟังก์ชันจำลองการโจมตี
+def simulate_attack(attack_type, severity, metrics):
+    impact = {
+        'identify': random.uniform(0, -0.5) * severity,
+        'protect': random.uniform(0, -0.5) * severity,
+        'detect': random.uniform(0, -0.5) * severity,
+        'respond': random.uniform(0, -0.5) * severity,
+        'recover': random.uniform(0, -0.5) * severity,
+        'govern': random.uniform(0, -0.5) * severity
+    }
+    
+    new_metrics = {key: max(1, value + impact[key]) for key, value in metrics.items()}
+    
+    attack_description = {
+        'DDoS': "Distributed Denial of Service attack overwhelmed the network.",
+        'Phishing': "Phishing campaign targeted employees, potentially compromising credentials.",
+        'Malware': "Malware infection detected in several systems, risking data integrity."
+    }
+    
+    return new_metrics, attack_description[attack_type]
 
 # สร้าง Streamlit UI
-st.title('AI-based Cybersecurity Assessment System using NIST CSF 2.0')
+st.title('Cybersecurity Assessment System using NIST CSF 2.0')
 
-# สร้างฟอร์มสำหรับกรอกข้อมูล
+# ส่วนกรอกข้อมูลองค์กร
+st.header('Organization Information')
+org_name = st.text_input('Organization Name')
+org_size = st.selectbox('Organization Size', ['Small', 'Medium', 'Large'])
+industry = st.selectbox('Industry', ['Finance', 'Healthcare', 'Technology', 'Retail', 'Manufacturing', 'Government', 'Other'])
+
+# สร้างฟอร์มสำหรับกรอกข้อมูล NIST CSF
 st.header('Enter Cybersecurity Metrics')
 
-col1, col2 = st.columns(2)
+metrics = {}
+for func in ['Identify', 'Protect', 'Detect', 'Respond', 'Recover', 'Govern']:
+    metrics[func.lower()] = st.slider(f'{func} Maturity', 1, 5, 3)
 
-with col1:
-    identify = st.slider('Identify Maturity', 1, 5, 3)
-    protect = st.slider('Protect Maturity', 1, 5, 3)
-    detect = st.slider('Detect Maturity', 1, 5, 3)
-
-with col2:
-    respond = st.slider('Respond Maturity', 1, 5, 3)
-    recover = st.slider('Recover Maturity', 1, 5, 3)
-    govern = st.slider('Govern Maturity', 1, 5, 3)
-
-vulnerabilities = st.number_input('Number of Vulnerabilities', 0, 100, 50)
-incidents = st.number_input('Number of Security Incidents', 0, 50, 10)
+# ฟังก์ชันสำหรับแสดงผลการประเมิน
+def display_assessment(metrics, org_name, org_size, industry):
+    nist_score = calculate_nist_score(metrics)
+    
+    if nist_score < 60:
+        security_level = 'Low'
+    elif nist_score < 80:
+        security_level = 'Medium'
+    else:
+        security_level = 'High'
+    
+    st.subheader(f'Risk Assessment Result for {org_name}')
+    st.write(f'Organization Size: {org_size}')
+    st.write(f'Industry: {industry}')
+    st.write(f'NIST CSF Score: {nist_score:.2f}%')
+    st.write(f'Security Level: {security_level}')
+    
+    # สร้าง gauge chart
+    fig = go.Figure(go.Indicator(
+        mode = "gauge+number",
+        value = nist_score,
+        title = {'text': "NIST CSF Score"},
+        gauge = {
+            'axis': {'range': [0, 100]},
+            'bar': {'color': "darkblue"},
+            'steps': [
+                {'range': [0, 60], 'color': "red"},
+                {'range': [60, 80], 'color': "yellow"},
+                {'range': [80, 100], 'color': "green"}
+            ]
+        }
+    ))
+    st.plotly_chart(fig)
+    
+    # ให้คำแนะนำ
+    recommendations = get_recommendations(security_level)
+    st.subheader('Top 3 Recommendations:')
+    for i, rec in enumerate(recommendations, 1):
+        st.write(f"{i}. {rec}")
+    
+    # แสดงรายละเอียดของแต่ละฟังก์ชัน NIST CSF
+    st.subheader('NIST CSF Function Details:')
+    for func, value in metrics.items():
+        st.write(f"{func.capitalize()}: {value:.2f}/5")
+        st.progress(value/5)
 
 # ประเมินความเสี่ยง
 if st.button('Assess Cybersecurity Posture'):
-    input_data = pd.DataFrame({
-        'identify': [identify],
-        'protect': [protect],
-        'detect': [detect],
-        'respond': [respond],
-        'recover': [recover],
-        'govern': [govern],
-        'vulnerabilities': [vulnerabilities],
-        'incidents': [incidents]
-    })
-    
-    prediction = model.predict(input_data)
-    prediction_proba = model.predict_proba(input_data)
-    
-    st.subheader('Risk Assessment Result:')
-    st.write(f'Predicted Security Level: {le.inverse_transform(prediction)[0]}')
-    
-    fig = go.Figure(data=[go.Bar(x=le.classes_, y=prediction_proba[0])])
-    fig.update_layout(title='Probability of Each Security Level', xaxis_title='Security Level', yaxis_title='Probability')
-    st.plotly_chart(fig)
+    if not org_name:
+        st.error('Please enter the Organization Name before assessment.')
+    else:
+        display_assessment(metrics, org_name, org_size, industry)
 
-# จำลองการโจมตี
+# ส่วนจำลองการโจมตี
 st.header("Cyber Attack Simulation")
-
 attack_type = st.selectbox("Select Attack Type", ["DDoS", "Phishing", "Malware"])
 severity = st.slider("Attack Severity", 1, 5, 3)
 
 if st.button("Simulate Attack"):
-    impact = simulate_attack(attack_type, severity)
+    new_metrics, attack_desc = simulate_attack(attack_type, severity, metrics)
     
-    st.subheader("Attack Impact:")
-    for key, value in impact.items():
-        st.write(f"{key.capitalize()}: {value}")
+    st.subheader("Attack Simulation Results")
+    st.write(f"Attack Type: {attack_type}")
+    st.write(f"Attack Description: {attack_desc}")
+    st.write("Impact on Cybersecurity Metrics:")
+    for func in metrics:
+        change = new_metrics[func] - metrics[func]
+        st.write(f"{func.capitalize()}: {metrics[func]:.2f} -> {new_metrics[func]:.2f} (Change: {change:.2f})")
     
-    # ปรับปรุงค่าตามผลกระทบ
-    new_input_data = pd.DataFrame({
-        'identify': [max(1, identify + impact['identify'])],
-        'protect': [max(1, protect + impact['protect'])],
-        'detect': [max(1, detect + impact['detect'])],
-        'respond': [max(1, respond + impact['respond'])],
-        'recover': [max(1, recover + impact['recover'])],
-        'govern': [max(1, govern + impact['govern'])],
-        'vulnerabilities': [vulnerabilities + impact['vulnerabilities']],
-        'incidents': [incidents + impact['incidents']]
-    })
-    
-    new_prediction = model.predict(new_input_data)
-    new_prediction_proba = model.predict_proba(new_input_data)
-    
-    st.subheader('New Risk Assessment After Attack:')
-    st.write(f'New Predicted Security Level: {le.inverse_transform(new_prediction)[0]}')
-    
-    new_fig = go.Figure(data=[go.Bar(x=le.classes_, y=new_prediction_proba[0])])
-    new_fig.update_layout(title='New Probability of Each Security Level After Attack', xaxis_title='Security Level', yaxis_title='Probability')
-    st.plotly_chart(new_fig)
+    st.subheader("New Assessment After Attack")
+    display_assessment(new_metrics, org_name, org_size, industry)
 
-st.sidebar.info('This is a demo of an AI-based Cybersecurity Assessment System using NIST Cybersecurity Framework 2.0.')
+st.sidebar.info('This is a demo of a Cybersecurity Assessment System using NIST Cybersecurity Framework 2.0 with attack simulation.')
