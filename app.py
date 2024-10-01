@@ -7,7 +7,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import random
 
-# ฟังก์ชันสำหรับสร้างข้อมูลจำลอง 
+# ฟังก์ชันสำหรับสร้างข้อมูลจำลอง
 def generate_sample_data(n_samples=1000):
     np.random.seed(42)
     data = pd.DataFrame({
@@ -44,11 +44,9 @@ def train_ai_model():
 
 # ฟังก์ชันสำหรับทำนายความเสี่ยง
 def predict_risk(model, scaler, metrics):
-    input_data = np.array([[
-        metrics['identify'], metrics['protect'], metrics['detect'],
-        metrics['respond'], metrics['recover'], metrics['govern'],
-        metrics['vulnerabilities'], metrics['incidents']
-    ]])
+    input_data = np.array([[metrics['identify'], metrics['protect'], metrics['detect'],
+                            metrics['respond'], metrics['recover'], metrics['govern'],
+                            metrics['vulnerabilities'], metrics['incidents']]])
     input_scaled = scaler.transform(input_data)
     prediction = model.predict(input_scaled)[0]
     probabilities = model.predict_proba(input_scaled)[0]
@@ -98,7 +96,7 @@ def simulate_attack(attack_type, severity, metrics):
         'incidents': random.randint(1, 5) * severity
     }
     
-    new_metrics = {key: max(0, min(4, metrics[key] + impact[key])) for key in metrics}
+    new_metrics = {key: max(0, min(4, metrics[key] + impact[key])) for key in metrics if key not in ['vulnerabilities', 'incidents']}
     new_metrics['vulnerabilities'] = min(100, metrics['vulnerabilities'] + impact['vulnerabilities'])
     new_metrics['incidents'] = min(50, metrics['incidents'] + impact['incidents'])
     
@@ -109,6 +107,62 @@ def simulate_attack(attack_type, severity, metrics):
     }
     
     return new_metrics, attack_description[attack_type]
+
+# ฟังก์ชันสำหรับแสดงผลการประเมิน
+def display_assessment(metrics, org_name, org_size, industry):
+    prediction, probabilities = predict_risk(model, scaler, metrics)
+    
+    st.subheader(f'AI-based Risk Assessment Result for {org_name}')
+    st.write(f'Organization Size: {org_size}')
+    st.write(f'Industry: {industry}')
+    st.write(f'Predicted Risk Level: {prediction}')
+    
+    # สร้าง bar chart สำหรับความมั่นใจ
+    fig = go.Figure(go.Bar(
+        x=[prediction],
+        y=[probabilities[list(model.classes_).index(prediction)] * 100],
+        text=f"{probabilities[list(model.classes_).index(prediction)] * 100:.2f}%",
+        textposition='auto',
+        marker=dict(color='lightskyblue'),
+        name='Confidence'
+    ))
+    fig.update_layout(
+        title=f"Risk Prediction and Confidence for {org_name}",
+        xaxis_title="Predicted Risk Level",
+        yaxis_title="Confidence (%)",
+        yaxis_range=[0, 100]
+    )
+    st.plotly_chart(fig)
+    
+    # สร้าง radar chart สำหรับแสดง capability ของแต่ละฟังก์ชัน
+    categories = ['Identify', 'Protect', 'Detect', 'Respond', 'Recover', 'Govern']
+    values = [metrics['identify'], metrics['protect'], metrics['detect'],
+              metrics['respond'], metrics['recover'], metrics['govern']]
+    
+    radar_fig = go.Figure(go.Scatterpolar(
+        r=values,
+        theta=categories,
+        fill='toself',
+        name='Cybersecurity Capabilities'
+    ))
+    
+    radar_fig.update_layout(
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                range=[0, 4]
+            )
+        ),
+        title=f"Cybersecurity Capabilities for {org_name}",
+        showlegend=False
+    )
+    st.plotly_chart(radar_fig)
+    
+    # AI-generated recommendations
+    recommendations = get_ai_recommendations(metrics, prediction)
+    st.subheader('Top 3 AI-generated Recommendations:')
+    for i, rec in enumerate(recommendations, 1):
+        st.write(f"{i}. {rec}")
 
 # สร้าง Streamlit UI
 st.title('AI-powered Cybersecurity Assessment System using NIST CSF 2.0')
@@ -126,71 +180,11 @@ industry = st.selectbox('Industry', ['Finance', 'Healthcare', 'Technology', 'Ret
 st.header('Enter Cybersecurity Metrics')
 
 metrics = {}
-
 for func in ['Identify', 'Protect', 'Detect', 'Respond', 'Recover', 'Govern']:
-    value = st.slider(
-        f'{func} Capability', 
-        min_value=0, 
-        max_value=4, 
-        value=2
-    )
-    metrics[func.lower()] = value
+    metrics[func.lower()] = st.slider(f'{func} Capability', min_value=0, max_value=4, value=2)
 
 metrics['vulnerabilities'] = st.number_input('Number of Known Vulnerabilities', 0, 100, 50)
 metrics['incidents'] = st.number_input('Number of Security Incidents in the Last Year', 0, 50, 10)
-
-# ฟังก์ชันสำหรับแสดงผลการประเมิน
-def display_assessment(metrics, org_name, org_size, industry):
-    prediction, probabilities = predict_risk(model, scaler, metrics)
-    
-    st.subheader(f'AI-based Risk Assessment Result for {org_name}')
-    st.write(f'Organization Size: {org_size}')
-    st.write(f'Industry: {industry}')
-    st.write(f'Predicted Risk Level: {prediction}')
-    
-    # สร้าง gauge chart
-    fig = go.Figure(go.Indicator(
-        mode = "gauge+number",
-        value = probabilities[list(model.classes_).index(prediction)] * 100,
-        title = {'text': f"Confidence in {prediction} Risk Prediction"},
-        gauge = {
-            'axis': {'range': [0, 100]},
-            'bar': {'color': "darkblue"},
-            'steps': [
-                {'range': [0, 33], 'color': "lightgreen"},
-                {'range': [33, 66], 'color': "yellow"},
-                {'range': [66, 100], 'color': "red"}
-            ]
-        }
-    ))
-    st.plotly_chart(fig)
-    
-    # AI-generated recommendations
-    recommendations = get_ai_recommendations(metrics, prediction)
-    st.subheader('Top 3 AI-generated Recommendations:')
-    for i, rec in enumerate(recommendations, 1):
-        st.write(f"{i}. {rec}")
-    
-    # แสดงรายละเอียดของแต่ละฟังก์ชัน NIST CSF
-    capability_descriptions = {
-        0: "Not Performed",
-        1: "Partially Performed",
-        2: "Largely Performed",
-        3: "Fully Performed",
-        4: "Adaptive"
-    }
-    
-    st.subheader('NIST CSF Function Details:')
-    for func, value in metrics.items():
-        if func not in ['vulnerabilities', 'incidents']:
-            value = int(value)  # แปลงเป็นจำนวนเต็ม
-            if value in capability_descriptions:
-                st.write(f"{func.capitalize()}: Level {value} - {capability_descriptions[value]}")
-                st.progress(value / 4)
-            else:
-                st.write(f"{func.capitalize()}: Value out of expected range.")
-    st.write(f"Vulnerabilities: {metrics['vulnerabilities']}")
-    st.write(f"Incidents: {metrics['incidents']}")
 
 # ประเมินความเสี่ยง
 if st.button('Assess Cybersecurity Posture'):
@@ -217,5 +211,3 @@ if st.button("Simulate Attack"):
     
     st.subheader("New Assessment After Attack")
     display_assessment(new_metrics, org_name, org_size, industry)
-
-st.sidebar.info('This is a demo of an AI-powered Cybersecurity Assessment System using NIST Cybersecurity Framework 2.0 with attack simulation.')
