@@ -3,211 +3,251 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-import random
+import requests
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
-# ฟังก์ชันสำหรับสร้างข้อมูลจำลอง
-def generate_sample_data(n_samples=1000):
-    np.random.seed(42)
-    data = pd.DataFrame({
-        'identify': np.random.randint(0, 5, n_samples),
-        'protect': np.random.randint(0, 5, n_samples),
-        'detect': np.random.randint(0, 5, n_samples),
-        'respond': np.random.randint(0, 5, n_samples),
-        'recover': np.random.randint(0, 5, n_samples),
-        'govern': np.random.randint(0, 5, n_samples),
-        'vulnerabilities': np.random.randint(0, 100, n_samples),
-        'incidents': np.random.randint(0, 50, n_samples),
-    })
-    data['risk_level'] = pd.cut(data['vulnerabilities'] + data['incidents'], 
-                                bins=[0, 30, 60, 150], 
-                                labels=['Low', 'Medium', 'High'])
-    return data
+# ปิดการแจ้งเตือนเกี่ยวกับ SSL verification
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
-# ฟังก์ชันสำหรับฝึกโมเดล AI
+# ฟังก์ชันสำหรับทดสอบการเชื่อมต่อ Nessus
+def test_nessus_connection(url, access_key, secret_key):
+    headers = {
+        'X-ApiKeys': f'accessKey={access_key};secretKey={secret_key}',
+        'Content-Type': 'application/json',
+    }
+    try:
+        response = requests.get(f'{url}/server/status', headers=headers, verify=False)
+        response.raise_for_status()
+        return True, "Connection successful! API is accessible."
+    except requests.exceptions.RequestException as e:
+        return False, f"Connection failed: {str(e)}"
+
+# ฟังก์ชันสำหรับดึงข้อมูลจาก Nessus
+def get_nessus_data(url, access_key, secret_key, scan_id):
+    headers = {
+        'X-ApiKeys': f'accessKey={access_key};secretKey={secret_key}',
+        'Content-Type': 'application/json',
+    }
+    try:
+        response = requests.get(f'{url}/scans/{scan_id}', headers=headers, verify=False)
+        response.raise_for_status()
+        scan_details = response.json()
+        
+        vulnerabilities = {
+            'Critical': 0, 'High': 0, 'Medium': 0, 'Low': 0, 'Info': 0
+        }
+        
+        hosts_data = []
+        for host in scan_details.get('hosts', []):
+            for severity in vulnerabilities.keys():
+                vulnerabilities[severity] += host.get(severity.lower(), 0)
+            
+            hosts_data.append({
+                'Host': host.get('hostname', 'Unknown'),
+                'Critical': host.get('critical', 0),
+                'High': host.get('high', 0),
+                'Medium': host.get('medium', 0),
+                'Low': host.get('low', 0),
+                'Info': host.get('info', 0)
+            })
+        
+        return vulnerabilities, hosts_data
+    except requests.exceptions.RequestException as e:
+        return None, f"Error fetching Nessus data: {str(e)}"
+
+# ฟังก์ชันสำหรับสร้างและฝึกโมเดล AI
 @st.cache_resource
-def train_ai_model():
-    data = generate_sample_data()
+def create_model():
+    data = pd.DataFrame({
+        'identify': np.random.randint(1, 5, 1000),
+        'protect': np.random.randint(1, 5, 1000),
+        'detect': np.random.randint(1, 5, 1000),
+        'respond': np.random.randint(1, 5, 1000),
+        'recover': np.random.randint(1, 5, 1000),
+        'govern': np.random.randint(1, 5, 1000),
+        'vulnerabilities': np.random.randint(0, 1000, 1000),
+        'risk_level': np.random.choice(['Low', 'Medium', 'High'], 1000)
+    })
+    
     X = data.drop('risk_level', axis=1)
     y = data['risk_level']
     
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    
     scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
+    X_scaled = scaler.fit_transform(X)
     
     model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_train_scaled, y_train)
+    model.fit(X_scaled, y)
     
     return model, scaler
 
-# ฟังก์ชันสำหรับทำนายความเสี่ยง
-def predict_risk(model, scaler, metrics):
-    input_data = np.array([[metrics['identify'], metrics['protect'], metrics['detect'],
-                            metrics['respond'], metrics['recover'], metrics['govern'],
-                            metrics['vulnerabilities'], metrics['incidents']]])
-    input_scaled = scaler.transform(input_data)
-    prediction = model.predict(input_scaled)[0]
-    probabilities = model.predict_proba(input_scaled)[0]
-    return prediction, probabilities
-
-# ฟังก์ชันสำหรับให้คำแนะนำ
-def get_ai_recommendations(metrics, prediction):
-    recommendations = {
-        'Low': [
-            "Increase cybersecurity awareness training for all employees.",
-            "Implement basic access controls and authentication mechanisms.",
-            "Develop an incident response plan."
-        ],
-        'Medium': [
-            "Enhance network segmentation to limit potential breach impacts.",
-            "Implement advanced threat detection systems.",
-            "Regularly conduct vulnerability assessments and penetration testing."
-        ],
-        'High': [
-            "Implement a comprehensive Security Information and Event Management (SIEM) solution.",
-            "Develop a rigorous third-party risk management program.",
-            "Implement a zero-trust architecture across the organization."
-        ]
-    }
-    base_recommendations = recommendations[prediction]
-    
-    # AI-enhanced recommendations
-    if metrics['identify'] < 2:
-        base_recommendations.append("Prioritize improving asset management and risk assessment processes.")
-    if metrics['protect'] < 2:
-        base_recommendations.append("Focus on enhancing data protection measures and access control mechanisms.")
-    if metrics['detect'] < 2:
-        base_recommendations.append("Invest in advanced threat detection and continuous monitoring capabilities.")
-    
-    return base_recommendations[:3]  # Return top 3 recommendations
-
 # ฟังก์ชันสำหรับจำลองการโจมตี
-def simulate_attack(attack_type, severity, metrics):
+def simulate_attack(attack_type, current_metrics):
     impact = {
-        'identify': max(-1, random.uniform(-0.5, 0) * severity),
-        'protect': max(-1, random.uniform(-0.5, 0) * severity),
-        'detect': max(-1, random.uniform(-0.5, 0) * severity),
-        'respond': max(-1, random.uniform(-0.5, 0) * severity),
-        'recover': max(-1, random.uniform(-0.5, 0) * severity),
-        'govern': max(-1, random.uniform(-0.5, 0) * severity),
-        'vulnerabilities': random.randint(5, 20) * severity,
-        'incidents': random.randint(1, 5) * severity
+        'identify': np.random.randint(-1, 1),
+        'protect': np.random.randint(-2, 0),
+        'detect': np.random.randint(-1, 2),
+        'respond': np.random.randint(-1, 2),
+        'recover': np.random.randint(-1, 1),
+        'govern': 0,
+        'vulnerabilities': np.random.randint(5, 50)
     }
     
-    new_metrics = {key: max(0, min(4, metrics[key] + impact[key])) for key in metrics if key not in ['vulnerabilities', 'incidents']}
-    new_metrics['vulnerabilities'] = min(100, metrics['vulnerabilities'] + impact['vulnerabilities'])
-    new_metrics['incidents'] = min(50, metrics['incidents'] + impact['incidents'])
+    for key in impact:
+        if key != 'vulnerabilities':
+            current_metrics[key] = max(1, min(current_metrics[key] + impact[key], 4))
+        else:
+            current_metrics[key] += impact[key]
     
-    attack_description = {
-        'DDoS': "Distributed Denial of Service attack overwhelmed the network.",
-        'Phishing': "Phishing campaign targeted employees, potentially compromising credentials.",
-        'Malware': "Malware infection detected in several systems, risking data integrity."
-    }
+    return current_metrics, impact
+
+# สร้าง Streamlit app
+st.set_page_config(page_title="Cybersecurity Risk Assessment", layout="wide")
+st.title('AI-powered Cybersecurity Risk Assessment System using NIST CSF 2.0')
+
+# สร้าง sidebar สำหรับการนำทาง
+page = st.sidebar.radio("Navigate", ["Nessus Connection", "Organization Info", "Data Input", "Risk Assessment", "Attack Simulation"])
+
+# โหลดโมเดล
+model, scaler = create_model()
+
+if page == "Nessus Connection":
+    st.header("Nessus Connection")
     
-    return new_metrics, attack_description[attack_type]
+    nessus_url = st.text_input("Nessus URL", value="https://localhost:8834")
+    access_key = st.text_input("Access Key", value="your_access_key_here")
+    secret_key = st.text_input("Secret Key", value="your_secret_key_here", type="password")
+    scan_id = st.number_input("Scan ID", min_value=1, value=37)
 
-# ฟังก์ชันสำหรับแสดงผลการประเมิน
-def display_assessment(metrics, org_name, org_size, industry):
-    prediction, probabilities = predict_risk(model, scaler, metrics)
+    if st.button("Test Nessus Connection"):
+        success, message = test_nessus_connection(nessus_url, access_key, secret_key)
+        if success:
+            st.success(message)
+        else:
+            st.error(message)
+
+    if st.button("Fetch Nessus Data"):
+        vulnerabilities, hosts_data = get_nessus_data(nessus_url, access_key, secret_key, scan_id)
+        if vulnerabilities:
+            st.success("Data fetched successfully!")
+            st.session_state['vulnerabilities'] = vulnerabilities
+            st.session_state['hosts_data'] = hosts_data
+            
+            st.subheader("Vulnerabilities Summary")
+            col1, col2 = st.columns(2)
+            with col1:
+                for severity, count in vulnerabilities.items():
+                    if severity != 'Info':
+                        st.metric(label=severity, value=count)
+            with col2:
+                fig = go.Figure(data=[go.Pie(labels=list(vulnerabilities.keys()), 
+                                             values=list(vulnerabilities.values()),
+                                             hole=.3)])
+                fig.update_layout(title="Vulnerability Distribution")
+                st.plotly_chart(fig)
+            
+            st.subheader("Host Data")
+            st.dataframe(pd.DataFrame(hosts_data))
+        else:
+            st.error(hosts_data)
+
+elif page == "Organization Info":
+    st.header("Organization Information")
     
-    st.subheader(f'AI-based Risk Assessment Result for {org_name}')
-    st.write(f'Organization Size: {org_size}')
-    st.write(f'Industry: {industry}')
-    st.write(f'Predicted Risk Level: {prediction}')
+    org_name = st.text_input("Organization Name")
+    org_size = st.selectbox("Organization Size", ["Small", "Medium", "Large"])
+    industry = st.selectbox("Industry", ["Finance", "Healthcare", "Technology", "Retail", "Manufacturing", "Other"])
     
-    # สร้าง bar chart สำหรับความมั่นใจ
-    fig = go.Figure(go.Bar(
-        x=[prediction],
-        y=[probabilities[list(model.classes_).index(prediction)] * 100],
-        text=f"{probabilities[list(model.classes_).index(prediction)] * 100:.2f}%",
-        textposition='auto',
-        marker=dict(color='lightskyblue'),
-        name='Confidence'
-    ))
-    fig.update_layout(
-        title=f"Risk Prediction and Confidence for {org_name}",
-        xaxis_title="Predicted Risk Level",
-        yaxis_title="Confidence (%)",
-        yaxis_range=[0, 100]
-    )
-    st.plotly_chart(fig)
+    contact_name = st.text_input("Contact Person Name")
+    contact_email = st.text_input("Contact Email")
     
-    # สร้าง radar chart สำหรับแสดง capability ของแต่ละฟังก์ชัน
-    categories = ['Identify', 'Protect', 'Detect', 'Respond', 'Recover', 'Govern']
-    values = [metrics['identify'], metrics['protect'], metrics['detect'],
-              metrics['respond'], metrics['recover'], metrics['govern']]
+    if st.button("Save Organization Info"):
+        st.session_state['org_info'] = {
+            'name': org_name,
+            'size': org_size,
+            'industry': industry,
+            'contact_name': contact_name,
+            'contact_email': contact_email
+        }
+        st.success("Organization information saved successfully!")
+
+elif page == "Data Input":
+    st.header("Data Input")
     
-    radar_fig = go.Figure(go.Scatterpolar(
-        r=values,
-        theta=categories,
-        fill='toself',
-        name='Cybersecurity Capabilities'
-    ))
-    
-    radar_fig.update_layout(
-        polar=dict(
-            radialaxis=dict(
-                visible=True,
-                range=[0, 4]
-            )
-        ),
-        title=f"Cybersecurity Capabilities for {org_name}",
-        showlegend=False
-    )
-    st.plotly_chart(radar_fig)
-    
-    # AI-generated recommendations
-    recommendations = get_ai_recommendations(metrics, prediction)
-    st.subheader('Top 3 AI-generated Recommendations:')
-    for i, rec in enumerate(recommendations, 1):
-        st.write(f"{i}. {rec}")
-
-# สร้าง Streamlit UI
-st.title('AI-powered Cybersecurity Assessment System using NIST CSF 2.0')
-
-# โหลดโมเดล AI
-model, scaler = train_ai_model()
-
-# ส่วนกรอกข้อมูลองค์กร
-st.header('Organization Information')
-org_name = st.text_input('Organization Name')
-org_size = st.selectbox('Organization Size', ['Small', 'Medium', 'Large'])
-industry = st.selectbox('Industry', ['Finance', 'Healthcare', 'Technology', 'Retail', 'Manufacturing', 'Government', 'Other'])
-
-# สร้างฟอร์มสำหรับกรอกข้อมูล NIST CSF
-st.header('Enter Cybersecurity Metrics')
-
-metrics = {}
-for func in ['Identify', 'Protect', 'Detect', 'Respond', 'Recover', 'Govern']:
-    metrics[func.lower()] = st.slider(f'{func} Capability', min_value=0, max_value=4, value=2)
-
-metrics['vulnerabilities'] = st.number_input('Number of Known Vulnerabilities', 0, 100, 50)
-metrics['incidents'] = st.number_input('Number of Security Incidents in the Last Year', 0, 50, 10)
-
-# ประเมินความเสี่ยง
-if st.button('Assess Cybersecurity Posture'):
-    if not org_name:
-        st.error('Please enter the Organization Name before assessment.')
+    if 'org_info' not in st.session_state:
+        st.warning("Please fill in the Organization Information first.")
     else:
-        display_assessment(metrics, org_name, org_size, industry)
+        st.subheader("NIST CSF 2.0 Capabilities")
+        metrics = {}
+        for metric in ['identify', 'protect', 'detect', 'respond', 'recover', 'govern']:
+            metrics[metric] = st.slider(f"{metric.capitalize()} Capability", 1, 4, 2)
+        
+        st.subheader("Vulnerability Data")
+        if 'vulnerabilities' in st.session_state:
+            vulnerabilities = st.session_state['vulnerabilities']
+            total_vulns = sum(vulnerabilities[severity] for severity in ['Critical', 'High', 'Medium', 'Low'])
+            st.write(f"Total vulnerabilities detected: {total_vulns}")
+            metrics['vulnerabilities'] = st.number_input("Confirm or adjust number of vulnerabilities", 0, 1000, total_vulns)
+        else:
+            metrics['vulnerabilities'] = st.number_input("Number of Vulnerabilities", 0, 1000, 50)
+        
+        if st.button("Save Data"):
+            st.session_state['metrics'] = metrics
+            st.success("Data saved successfully!")
 
-# ส่วนจำลองการโจมตี
-st.header("Cyber Attack Simulation")
-attack_type = st.selectbox("Select Attack Type", ["DDoS", "Phishing", "Malware"])
-severity = st.slider("Attack Severity", 1, 5, 3)
+elif page == "Risk Assessment":
+    st.header("Risk Assessment")
+    
+    if 'metrics' not in st.session_state:
+        st.error("Please input data in the Data Input page first.")
+    else:
+        metrics = st.session_state['metrics']
+        
+        input_data = np.array([[metrics[key] for key in metrics]])
+        input_scaled = scaler.transform(input_data)
+        risk_level = model.predict(input_scaled)[0]
+        risk_proba = model.predict_proba(input_scaled)[0]
+        
+        st.subheader("Current Risk Assessment")
+        st.write(f"Predicted Risk Level: {risk_level}")
+        
+        fig = go.Figure(data=[go.Bar(x=['Low', 'Medium', 'High'], y=risk_proba)])
+        fig.update_layout(title="Risk Level Probabilities", xaxis_title="Risk Level", yaxis_title="Probability")
+        st.plotly_chart(fig)
 
-if st.button("Simulate Attack"):
-    new_metrics, attack_desc = simulate_attack(attack_type, severity, metrics)
+elif page == "Attack Simulation":
+    st.header("Attack Simulation")
     
-    st.subheader("Attack Simulation Results")
-    st.write(f"Attack Type: {attack_type}")
-    st.write(f"Attack Description: {attack_desc}")
-    st.write("Impact on Cybersecurity Metrics:")
-    for func in metrics:
-        change = new_metrics[func] - metrics[func]
-        st.write(f"{func.capitalize()}: {metrics[func]:.2f} -> {new_metrics[func]:.2f} (Change: {change:.2f})")
-    
-    st.subheader("New Assessment After Attack")
-    display_assessment(new_metrics, org_name, org_size, industry)
+    if 'metrics' not in st.session_state:
+        st.error("Please complete the Risk Assessment first.")
+    else:
+        metrics = st.session_state['metrics'].copy()
+        
+        st.subheader("Simulation Controls")
+        attack_type = st.selectbox("Select Attack Type", ["malware", "phishing", "ddos", "data_breach"])
+        
+        if st.button("Run Simulation"):
+            new_metrics, impact = simulate_attack(attack_type, metrics)
+            
+            st.subheader("Simulation Results")
+            st.write("Impact of the attack:")
+            for key, value in impact.items():
+                st.write(f"- {key}: {value}")
+            
+            input_data = np.array([[new_metrics[key] for key in new_metrics]])
+            input_scaled = scaler.transform(input_data)
+            new_risk_level = model.predict(input_scaled)[0]
+            new_risk_proba = model.predict_proba(input_scaled)[0]
+            
+            st.subheader("Post-Attack Risk Assessment")
+            st.write(f"New Predicted Risk Level: {new_risk_level}")
+            
+            fig = go.Figure(data=[
+                go.Bar(name='Before Attack', x=['Low', 'Medium', 'High'], y=model.predict_proba(scaler.transform(np.array([[metrics[key] for key in metrics]])))[0]),
+                go.Bar(name='After Attack', x=['Low', 'Medium', 'High'], y=new_risk_proba)
+            ])
+            fig.update_layout(title="Risk Level Probabilities Comparison", xaxis_title="Risk Level", yaxis_title="Probability", barmode='group')
+            st.plotly_chart(fig)
+
+            st.session_state['metrics'] = new_metrics
+            st.success("Metrics updated after the attack simulation.")
