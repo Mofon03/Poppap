@@ -170,10 +170,13 @@ def nist_csf_analysis():
         'Low': 'lightgreen',
         'Info': 'gray'
     }
-    fig_vuln = px.bar(vuln_df, x='Severity', y='Count', title='Number of Vulnerabilities by Severity', text='Count',
-                      color='Severity', color_discrete_map=severity_colors)
-    fig_vuln.update_traces(textposition='outside')
-    st.plotly_chart(fig_vuln)
+    if sum(vuln_counts) > 0:
+        fig_vuln = px.bar(vuln_df, x='Severity', y='Count', title='Number of Vulnerabilities by Severity', text='Count',
+                          color='Severity', color_discrete_map=severity_colors)
+        fig_vuln.update_traces(textposition='outside')
+        st.plotly_chart(fig_vuln)
+    else:
+        st.warning("Insufficient vulnerability data to display the graph.")
 
     # ส่วนที่ 2: แสดงค่าฟังก์ชัน NIST CSF 2.0
     st.subheader("NIST CSF 2.0 Function Scores")
@@ -488,10 +491,20 @@ def main():
             if 'nessus_data' not in st.session_state:
                 st.session_state['nessus_data'] = saved_data
 
-            if st.button("Use Existing Data"):
+        if st.button("Use Existing Data"):
+            if 'nessus_data' in st.session_state:
                 vulnerabilities = st.session_state['nessus_data']['vulnerabilities']
                 hosts_data = st.session_state['nessus_data']['hosts_data']
-                nist_scores = st.session_state['nessus_data']['nist_scores']
+
+                # Check if 'nist_scores' exists
+                if 'nist_scores' in st.session_state['nessus_data']:
+                    nist_scores = st.session_state['nessus_data']['nist_scores']
+                else:
+                    st.warning("'nist_scores' not found in existing data. Calculating now.")
+                    nist_scores = calculate_nist_scores(vulnerabilities)
+                    st.session_state['nessus_data']['nist_scores'] = nist_scores
+                    save_data_to_json(st.session_state['nessus_data'])  # Save updated data
+
                 st.success("Loaded data from JSON file")
                 st.write("Current Host Data:", hosts_data)
                 show_data = True
@@ -504,6 +517,8 @@ def main():
                     st.success("Model created and stored in session state")
                 else:
                     st.error("Unable to create model from existing data")
+            else:
+                st.error("No existing data found. Please fetch new data from Nessus.")
 
         if st.button("Test Nessus Connection"):
             success, message = test_nessus_connection(nessus_url, access_key, secret_key)
@@ -555,9 +570,12 @@ def main():
                     'Count': vuln_counts
                 })
 
-                fig_vuln = px.pie(vuln_df, names='Severity', values='Count', title='Distribution of Vulnerabilities',
-                                  color='Severity', color_discrete_map=severity_colors)
-                st.plotly_chart(fig_vuln)
+                if sum(vuln_counts) > 0:
+                    fig_vuln = px.pie(vuln_df, names='Severity', values='Count', title='Distribution of Vulnerabilities',
+                                      color='Severity', color_discrete_map=severity_colors)
+                    st.plotly_chart(fig_vuln)
+                else:
+                    st.warning("Insufficient vulnerability data to display the graph.")
 
                 st.subheader("Host Data")
                 st.dataframe(pd.DataFrame(hosts_data))
