@@ -160,7 +160,7 @@ def simulate_attack(attack_type, current_metrics):
     return current_metrics, impact
 
 # Build the Streamlit app
-st.title('AI-powered Cybersecurity Risk Assessment System using NIST CSF 2.0')
+st.title('AI-powered Cybersecurity Risk Assessment System using NIST ๅๅCSF 2.0')
 
 # Create sidebar for navigation
 page = st.sidebar.radio("Navigate", ["Nessus Connection", "Organization Info", "Data Input", "Risk Assessment", "Attack Simulation"])
