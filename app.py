@@ -304,7 +304,7 @@ def enhanced_attack_simulation():
         st.plotly_chart(fig_before)
 
         # แสดงกราฟ After Attack
-        fig_after = go.Figure()
+        fig_after = go.Figure()  # สร้าง fig_after ใหม่ตรงนี้
         fig_after.add_trace(go.Bar(
             x=functions,
             y=after_attack,
@@ -466,11 +466,39 @@ def generate_report_and_recommendations():
     st.write("4. Perform continuous penetration testing and vulnerability assessments.")
     st.write("5. Develop and maintain incident response plans, and test them regularly.")
 
+def questionnaire():
+    st.header("แบบสอบถามประเมินประสิทธิภาพระบบ AI")
+
+    st.write("""
+    แบบสอบถามนี้เป็นส่วนหนึ่งของการวิจัยเรื่อง "การศึกษาวิเคราะห์และการพัฒนาระบบปัญญาประดิษฐ์เพื่อประเมินความมั่นคงปลอดภัยไซเบอร์โดยประยุกต์ใช้ NIST Cybersecurity Framework 2.0 และ Nessus Vulnerability Scanner"
+    
+    เราต้องการความคิดเห็นของคุณเพื่อปรับปรุงระบบของเรา!
+    """)
+
+    st.info("""
+    แบบสอบถามนี้ประกอบด้วยคำถามเกี่ยวกับ:
+    1. ข้อมูลทั่วไปของผู้ตอบแบบสอบถาม
+    2. การประเมินระบบ AI
+    3. การประเมินตามฟังก์ชันของ NIST CSF 2.0
+    4. การเปรียบเทียบกับวิธีการประเมินแบบดั้งเดิม
+    5. ความคิดเห็นและข้อเสนอแนะเพิ่มเติม
+    """)
+
+    st.warning("การตอบแบบสอบถามนี้จะใช้เวลาประมาณ 10-15 นาที")
+
+    # แทนที่ URL นี้ด้วยลิงค์จริงของแบบสอบถามของคุณ
+    survey_link = "https://your-survey-link.com"
+
+    if st.button("คลิกที่นี่เพื่อไปยังแบบสอบถาม"):
+        st.markdown(f"[คลิกเพื่อเปิดแบบสอบถามในแท็บใหม่]({survey_link})")
+        st.write("หากลิงค์ไม่ทำงาน กรุณาคัดลอกและวางลิงค์ต่อไปนี้ในเบราว์เซอร์ของคุณ:")
+        st.code(survey_link)
+
 def main():
     st.sidebar.title("Navigation")
     page = st.sidebar.radio("Go to", ["Home", "Connect to Nessus", "Organization Info", "Data Input",
                                       "Risk Assessment", "NIST CSF Analysis", "Traditional Comparison",
-                                      "Attack Simulation", "Trend Analysis", "Report"])
+                                      "Attack Simulation", "Trend Analysis", "Report", "Questionnaire"])
 
     if page == "Home":
         st.title("AI-powered Cybersecurity Risk Assessment using NIST CSF 2.0")
@@ -716,5 +744,10 @@ def main():
     elif page == "Report":
         generate_report_and_recommendations()
 
+    elif page == "Questionnaire":
+        questionnaire()
+
 if __name__ == "__main__":
     main()
+                    
+        
