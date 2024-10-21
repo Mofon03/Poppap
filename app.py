@@ -487,7 +487,7 @@ def questionnaire():
     st.warning("การตอบแบบสอบถามนี้จะใช้เวลาประมาณ 10-15 นาที")
 
     # แทนที่ URL นี้ด้วยลิงค์จริงของแบบสอบถามของคุณ
-    survey_link = "https://your-survey-link.com"
+    survey_link = "https://docs.google.com/forms/d/e/1FAIpQLSe0jn6OSbGW7epTTy2JY5w_QS-jFytZbvdQ-p_sVa4GvIk6rg/viewform?vc=0&c=0&w=1&flr=0"
 
     if st.button("คลิกที่นี่เพื่อไปยังแบบสอบถาม"):
         st.markdown(f"[คลิกเพื่อเปิดแบบสอบถามในแท็บใหม่]({survey_link})")
