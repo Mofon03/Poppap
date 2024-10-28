@@ -1,0 +1,164 @@
+import pygame
+import random
+import sys
+
+# กำหนดค่าเริ่มต้น
+pygame.init()
+WIDTH = 800
+HEIGHT = 600
+GRID_SIZE = 20
+GRID_WIDTH = WIDTH // GRID_SIZE
+GRID_HEIGHT = HEIGHT // GRID_SIZE
+
+# สี
+WHITE = (255, 255, 255)
+RED = (255, 0, 0)
+GREEN = (0, 255, 0)
+BLACK = (0, 0, 0)
+BLUE = (0, 0, 255)
+
+# สร้างหน้าต่างเกม
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption('Snake Game - poppap & May')
+clock = pygame.time.Clock()
+
+class Snake:
+    def __init__(self):
+        self.length = 1
+        self.positions = [(GRID_WIDTH // 2, GRID_HEIGHT // 2)]
+        self.direction = random.choice([UP, DOWN, LEFT, RIGHT])
+        self.color = GREEN
+        self.score = 0
+
+    def get_head_position(self):
+        return self.positions[0]
+
+    def update(self):
+        cur = self.get_head_position()
+        x, y = self.direction
+        new = ((cur[0] + x) % GRID_WIDTH, (cur[1] + y) % GRID_HEIGHT)
+        if new in self.positions[3:]:
+            return False
+        else:
+            self.positions.insert(0, new)
+            if len(self.positions) > self.length:
+                self.positions.pop()
+            return True
+
+    def render(self, surface):
+        for p in self.positions:
+            pygame.draw.rect(surface, self.color, 
+                           (p[0] * GRID_SIZE, p[1] * GRID_SIZE, GRID_SIZE, GRID_SIZE))
+
+class Food:
+    def __init__(self):
+        self.position = (0, 0)
+        self.color = RED
+        self.randomize_position()
+
+    def randomize_position(self):
+        self.position = (random.randint(0, GRID_WIDTH-1), 
+                        random.randint(0, GRID_HEIGHT-1))
+
+    def render(self, surface):
+        pygame.draw.rect(surface, self.color,
+                        (self.position[0] * GRID_SIZE, 
+                         self.position[1] * GRID_SIZE, 
+                         GRID_SIZE, GRID_SIZE))
+
+# ทิศทาง
+UP = (0, -1)
+DOWN = (0, 1)
+LEFT = (-1, 0)
+RIGHT = (1, 0)
+
+def draw_text():
+    font = pygame.font.Font(None, 36)
+    # วาด poppap
+    text_poppap = font.render("poppap", True, BLUE)
+    text_rect_poppap = text_poppap.get_rect()
+    text_rect_poppap.topright = (WIDTH - 10, 10)
+    screen.blit(text_poppap, text_rect_poppap)
+    
+    # วาด May
+    text_may = font.render("May", True, BLUE)
+    text_rect_may = text_may.get_rect()
+    text_rect_may.topleft = (10, 10)
+    screen.blit(text_may, text_rect_may)
+    
+    # วาดคะแนน
+    score_text = font.render(f'Score: {snake.score}', True, WHITE)
+    score_rect = score_text.get_rect()
+    score_rect.center = (WIDTH // 2, 20)
+    screen.blit(score_text, score_rect)
+
+def draw_game_over():
+    font = pygame.font.Font(None, 72)
+    text = font.render('Game Over!', True, RED)
+    text_rect = text.get_rect()
+    text_rect.center = (WIDTH // 2, HEIGHT // 2)
+    screen.blit(text, text_rect)
+    
+    font = pygame.font.Font(None, 36)
+    score_text = font.render(f'Final Score: {snake.score}', True, WHITE)
+    score_rect = score_text.get_rect()
+    score_rect.center = (WIDTH // 2, HEIGHT // 2 + 50)
+    screen.blit(score_text, score_rect)
+    
+    restart_text = font.render('Press SPACE to restart', True, WHITE)
+    restart_rect = restart_text.get_rect()
+    restart_rect.center = (WIDTH // 2, HEIGHT // 2 + 100)
+    screen.blit(restart_text, restart_rect)
+
+def main():
+    global snake
+    snake = Snake()
+    food = Food()
+    game_over = False
+
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            elif event.type == pygame.KEYDOWN:
+                if not game_over:
+                    if event.key == pygame.K_UP and snake.direction != DOWN:
+                        snake.direction = UP
+                    elif event.key == pygame.K_DOWN and snake.direction != UP:
+                        snake.direction = DOWN
+                    elif event.key == pygame.K_LEFT and snake.direction != RIGHT:
+                        snake.direction = LEFT
+                    elif event.key == pygame.K_RIGHT and snake.direction != LEFT:
+                        snake.direction = RIGHT
+                else:
+                    if event.key == pygame.K_SPACE:
+                        snake = Snake()
+                        food = Food()
+                        game_over = False
+
+        if not game_over:
+            screen.fill(BLACK)
+            
+            if not snake.update():
+                game_over = True
+            
+            # ตรวจสอบการกินอาหาร
+            if snake.get_head_position() == food.position:
+                snake.length += 1
+                snake.score += 10
+                food.randomize_position()
+                while food.position in snake.positions:
+                    food.randomize_position()
+            
+            snake.render(screen)
+            food.render(screen)
+            draw_text()
+        else:
+            draw_game_over()
+        
+        pygame.display.update()
+        clock.tick(10)
+
+if __name__ == '__main__':
+    main()
