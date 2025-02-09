@@ -5,749 +5,921 @@ import plotly.graph_objects as go
 import plotly.express as px
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LinearRegression
-import joblib
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.metrics import classification_report, confusion_matrix, balanced_accuracy_score
+import xml.etree.ElementTree as ET
+from datetime import datetime
+from typing import Dict, List, Tuple
 import os
-import json
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
-import requests
+import pickle
+from collections import Counter
 
-# ปิดการเตือนเกี่ยวกับ SSL
-requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+# Page configuration
+st.set_page_config(page_title="NIST CSF 2.0 Assessment System", layout="wide")
 
-# ตั้งค่าการแสดงผลของหน้าเว็บ
-st.set_page_config(page_title="AI-powered Cybersecurity Risk Assessment", layout="wide")
-
-# ฟังก์ชันช่วยเหลือ
-def save_model(model, filename):
-    joblib.dump(model, filename)
-
-def load_model(filename):
-    return joblib.load(filename)
-
-def save_data_to_json(data, filename='nessus_data.json'):
-    with open(filename, 'w') as f:
-        json.dump(data, f)
-
-def load_data_from_json(filename='nessus_data.json'):
-    if os.path.exists(filename):
-        with open(filename, 'r') as f:
-            return json.load(f)
-    return None
-
-def test_nessus_connection(url, access_key, secret_key):
-    headers = {
-        'X-ApiKeys': f'accessKey={access_key};secretKey={secret_key}',
-        'Content-Type': 'application/json',
+# Constants
+NIST_FUNCTIONS = {
+    'identify': {
+        'categories': ['ID.AM', 'ID.BE', 'ID.GV', 'ID.RA', 'ID.RM', 'ID.SC'],
+        'keywords': ['asset', 'inventory', 'configuration', 'business', 'risk'],
+        'controls_keywords': ['compliance', 'configuration', 'asset', 'risk'],
+        'weight': 1.5  # ปรับเพิ่มน้ำหนัก
+    },
+    'protect': {
+        'categories': ['PR.AC', 'PR.DS', 'PR.IP', 'PR.MA', 'PR.PT'],
+        'keywords': ['access control', 'encryption', 'firewall', 'authentication'],
+        'controls_keywords': ['access', 'authentication', 'encryption', 'firewall'],
+        'weight': 1.5  # ปรับเพิ่มน้ำหนัก
+    },
+    'detect': {
+        'categories': ['DE.AE', 'DE.CM', 'DE.DP'],
+        'keywords': ['monitoring', 'anomalies', 'detection', 'alerts'],
+        'controls_keywords': ['ids', 'monitoring', 'detection', 'analysis'],
+        'weight': 1.2
+    },
+    'respond': {
+        'categories': ['RS.RP', 'RS.CO', 'RS.AN', 'RS.MI', 'RS.IM'],
+        'keywords': ['incident', 'response', 'mitigation', 'communication'],
+        'controls_keywords': ['incident', 'response', 'patch', 'update'],
+        'weight': 1.0
+    },
+    'recover': {
+        'categories': ['RC.RP', 'RC.IM', 'RC.CO'],
+        'keywords': ['recovery', 'backup', 'restore', 'resilience'],
+        'controls_keywords': ['backup', 'recovery', 'continuity', 'restore'],
+        'weight': 0.8
+    },
+    'govern': {
+        'categories': ['GV.PL', 'GV.RM', 'GV.IM', 'GV.CM'],
+        'keywords': ['policy', 'governance', 'compliance', 'management'],
+        'controls_keywords': ['policy', 'governance', 'compliance', 'audit'],
+        'weight': 1.0
     }
-    try:
-        response = requests.get(f'{url}/server/status', headers=headers, verify=False)
-        response.raise_for_status()
-        return True, "Connection successful! API is accessible."
-    except requests.exceptions.RequestException as e:
-        return False, f"Connection failed: {str(e)}"
+}
 
-def get_nessus_data(url, access_key, secret_key, scan_id):
-    headers = {
-        'X-ApiKeys': f'accessKey={access_key};secretKey={secret_key}',
-        'Content-Type': 'application/json',
+IMPLEMENTATION_TIERS = {
+    'Tier 1': {
+        'name': 'Partial',
+        'range': (1.0, 2.0),
+        'description': 'Limited awareness and ad hoc implementation',
+        'characteristics': [
+            'Risk management practices are not formalized',
+            'Limited awareness of cybersecurity risks',
+            'Response to threats is reactive'
+        ]
+    },
+    'Tier 2': {
+        'name': 'Risk Informed',
+        'range': (2.0, 3.0),
+        'description': 'Risk informed, but policies not formalized',
+        'characteristics': [
+            'Risk management exists but not organization-wide',
+            'Increased awareness of cybersecurity risks',
+            'Some proactive capabilities exist'
+        ]
+    },
+    'Tier 3': {
+        'name': 'Repeatable',
+        'range': (3.0, 3.5),
+        'description': 'Formally approved and implemented policies',
+        'characteristics': [
+            'Organization-wide risk management policies',
+            'Regular cybersecurity practices',
+            'Consistent response procedures'
+        ]
+    },
+    'Tier 4': {
+        'name': 'Adaptive',
+        'range': (3.5, 4.0),
+        'description': 'Adaptive and proactive implementation',
+        'characteristics': [
+            'Continuous improvement of cybersecurity practices',
+            'Active risk management',
+            'Proactive threat response'
+        ]
     }
-    try:
-        response = requests.get(f'{url}/scans/{scan_id}', headers=headers, verify=False)
-        response.raise_for_status()
-        scan_details = response.json()
+}
 
+ATTACK_SCENARIOS = {
+    'Ransomware Attack': {
+        'description': 'Simulation of a ransomware attack targeting critical systems',
+        'progression_stages': [
+            'Initial Access through Phishing',
+            'Lateral Movement and Privilege Escalation',
+            'Data Encryption and System Lock',
+            'Ransom Demand'
+        ],
+        'impact_factors': {
+            'identify': 0.7,
+            'protect': 0.8,
+            'detect': 0.6,
+            'respond': 0.5,
+            'recover': 0.4,
+            'govern': 0.3
+        }
+    },
+    'Supply Chain Attack': {
+        'description': 'Simulation of a compromise through third-party software',
+        'progression_stages': [
+            'Vendor System Compromise',
+            'Malicious Update Distribution',
+            'Backdoor Installation',
+            'Data Exfiltration'
+        ],
+        'impact_factors': {
+            'identify': 0.8,
+            'protect': 0.7,
+            'detect': 0.6,
+            'respond': 0.5,
+            'recover': 0.4,
+            'govern': 0.6
+        }
+    },
+    'Phishing Attack': {
+        'description': 'Simulation of a targeted phishing campaign',
+        'progression_stages': [
+            'Email Distribution',
+            'Credential Harvest',
+            'Account Compromise',
+            'Data Breach'
+        ],
+        'impact_factors': {
+            'identify': 0.5,
+            'protect': 0.7,
+            'detect': 0.6,
+            'respond': 0.5,
+            'recover': 0.3,
+            'govern': 0.4
+        }
+    },
+    'DDoS Attack': {
+        'description': 'Simulation of a distributed denial of service attack',
+        'progression_stages': [
+            'Initial Traffic Surge',
+            'Service Degradation',
+            'System Overload',
+            'Service Disruption'
+        ],
+        'impact_factors': {
+            'identify': 0.4,
+            'protect': 0.6,
+            'detect': 0.7,
+            'respond': 0.6,
+            'recover': 0.5,
+            'govern': 0.3
+        }
+    }
+}
+# Core functions
+def parse_nessus_file(file_path: str) -> Dict:
+    """Parse Nessus scan file with improved mapping."""
+    try:
+        tree = ET.parse(file_path)
+        root = tree.getroot()
+        
         vulnerabilities = {
-            'Critical': 0, 'High': 0, 'Medium': 0, 'Low': 0, 'Info': 0
+            'Critical': 0,
+            'High': 0,
+            'Medium': 0,
+            'Low': 0,
+            'Info': 0
+        }
+        
+        security_metrics = {
+            func: {'controls': 0, 'findings': 0} 
+            for func in NIST_FUNCTIONS.keys()
         }
 
-        hosts_data = []
-        for host in scan_details.get('hosts', []):
-            severity_counts = host.get('severity_counts', {})
-            for severity in vulnerabilities.keys():
-                count = severity_counts.get(severity.upper(), 0)
-                vulnerabilities[severity] += count
+        # Process each report item
+        for report_host in root.findall('.//ReportHost'):
+            for item in report_host.findall('.//ReportItem'):
+                process_report_item(item, vulnerabilities, security_metrics)
 
-            hosts_data.append({
-                'Host': host.get('hostname', 'Unknown'),
-                'Critical': severity_counts.get('CRITICAL', 0),
-                'High': severity_counts.get('HIGH', 0),
-                'Medium': severity_counts.get('MEDIUM', 0),
-                'Low': severity_counts.get('LOW', 0),
-                'Info': severity_counts.get('INFO', 0)
-            })
+        return {
+            'status': 'success',
+            'vulnerabilities': vulnerabilities,
+            'security_metrics': security_metrics,
+            'filename': os.path.basename(file_path),
+            'timestamp': datetime.now().isoformat()
+        }
 
-        # คำนวณคะแนน NIST CSF จากข้อมูลช่องโหว่
-        nist_scores = calculate_nist_scores(vulnerabilities)
+    except Exception as e:
+        return {
+            'status': 'error',
+            'message': str(e),
+            'filename': os.path.basename(file_path)
+        }
 
-        return vulnerabilities, hosts_data, nist_scores
-    except requests.exceptions.RequestException as e:
-        return None, f"Error fetching data from Nessus: {str(e)}"
+def process_report_item(item, vulnerabilities: Dict, metrics: Dict):
+    """Process individual Nessus report items with improved severity mapping."""
+    # Map severity with increased weights
+    severity = item.get('severity')
+    if severity == '4':
+        vulnerabilities['Critical'] += 2.0  # เพิ่มน้ำหนัก
+    elif severity == '3':
+        vulnerabilities['High'] += 1.5     # เพิ่มน้ำหนัก
+    elif severity == '2':
+        vulnerabilities['Medium'] += 1.0
+    elif severity == '1':
+        vulnerabilities['Low'] += 0.5
+    elif severity == '0':
+        vulnerabilities['Info'] += 0.2
 
-def calculate_nist_scores(vulnerabilities):
-    # กำหนดน้ำหนักของแต่ละระดับความรุนแรงต่อฟังก์ชัน NIST CSF
-    weights = {
-        'Critical': 4,
-        'High': 3,
-        'Medium': 2,
-        'Low': 1,
-        'Info': 0
-    }
-    total_vulns = sum(vulnerabilities.values())
-    nist_functions = ['identify', 'protect', 'detect', 'respond', 'recover', 'govern']
+    # Extract item information
+    plugin_name = item.get('pluginName', '').lower()
+    plugin_family = item.get('pluginFamily', '').lower()
+    plugin_text = f"{plugin_name} {plugin_family}"
+
+    # Map to NIST functions with improved accuracy
+    for func, data in NIST_FUNCTIONS.items():
+        # Check for controls
+        if any(keyword in plugin_text for keyword in data['controls_keywords']):
+            metrics[func]['controls'] += 1
+            
+        # Add findings based on severity and keywords
+        if severity in ['3', '4'] or any(keyword in plugin_text for keyword in data['keywords']):
+            metrics[func]['findings'] += 1.5 if severity in ['3', '4'] else 1.0
+
+def calculate_nist_scores(nessus_data: Dict) -> Dict[str, float]:
+    """Calculate NIST CSF scores with improved accuracy."""
     scores = {}
-    for func in nist_functions:
-        score = 0
-        for severity, count in vulnerabilities.items():
-            score += weights[severity] * count
-        # ปรับคะแนนให้อยู่ในช่วง 1 ถึง 4
-        if total_vulns > 0:
-            score = max(1, 4 - int((score / (total_vulns * 4)) * 3))
-        else:
-            score = 4
-        scores[func] = score
+    vulnerabilities = nessus_data['vulnerabilities']
+    metrics = nessus_data['security_metrics']
+
+    # Calculate base score
+    total_vulns = sum(vulnerabilities.values())
+    if total_vulns == 0:
+        base_score = 2.5  # ลดลงจาก 3.0
+    else:
+        # ปรับน้ำหนักช่องโหว่
+        weights = {
+            'Critical': 2.0,  # เพิ่มน้ำหนัก critical
+            'High': 1.5,      # เพิ่มน้ำหนัก high
+            'Medium': 0.8,    # ปรับน้ำหนัก medium
+            'Low': 0.2,
+            'Info': 0.0
+        }
+        weighted_sum = sum(vulnerabilities[sev] * weights[sev] for sev in vulnerabilities)
+        base_score = 2.5 - (weighted_sum / (total_vulns * 0.8))  # ปรับสูตร
+
+    # Calculate function-specific scores
+    for function in NIST_FUNCTIONS.keys():
+        metrics_data = metrics[function]
+        
+        # Calculate control score
+        control_score = min(0.8, metrics_data['controls'] / 15)  # ปรับลดค่าสูงสุด
+        
+        # Calculate finding penalty
+        finding_penalty = min(1.5, metrics_data['findings'] / 30) if metrics_data['findings'] > 0 else 0
+        
+        # Calculate final score
+        weight = NIST_FUNCTIONS[function]['weight']
+        function_score = (base_score + control_score - finding_penalty) * weight
+        
+        # Normalize to 1-4 range
+        function_score = max(1.0, min(4.0, function_score))
+        scores[function] = round(function_score, 2)
+
     return scores
 
-@st.cache_resource
-def create_model(vulnerabilities_data, nist_scores_data):
-    if not isinstance(vulnerabilities_data, list) or not all(isinstance(item, dict) for item in vulnerabilities_data):
-        st.error("Invalid vulnerability data format")
-        return None, None
+def determine_tier(scores: Dict[str, float]) -> str:
+    """Determine Implementation Tier with improved weighting."""
+    # Calculate weighted average score
+    weighted_sum = sum(scores[func] * NIST_FUNCTIONS[func]['weight'] 
+                      for func in NIST_FUNCTIONS.keys())
+    total_weight = sum(func_data['weight'] for func_data in NIST_FUNCTIONS.values())
+    avg_score = weighted_sum / total_weight
 
-    try:
-        data = pd.DataFrame(vulnerabilities_data)
-        n_samples = len(vulnerabilities_data)
-        for feature in ['identify', 'protect', 'detect', 'respond', 'recover', 'govern']:
-            data[feature] = nist_scores_data.get(feature, 1)
-
-        data['risk_level'] = pd.cut(data['Critical'] + data['High'] + data['Medium'],
-                                    bins=[-1, 10, 30, float('inf')],
-                                    labels=['Low', 'Medium', 'High'])
-
-        for column in data.columns:
-            if data[column].dtype.name == 'category':
-                data[column] = data[column].cat.add_categories(['Unknown']).fillna('Unknown')
-            else:
-                data[column].fillna(0, inplace=True)
-
-        X = data[['identify', 'protect', 'detect', 'respond', 'recover', 'govern',
-                  'Critical', 'High', 'Medium', 'Low', 'Info']]
-        y = data['risk_level']
-
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        model = RandomForestClassifier(n_estimators=100, random_state=42)
-        model.fit(X_scaled, y)
-
-        return model, scaler
-    except Exception as e:
-        st.error(f"Error creating model: {str(e)}")
-        return None, None
-
-def nist_csf_analysis():
-    st.header("Detailed NIST CSF 2.0 Analysis")
-
-    if 'nessus_data' not in st.session_state or 'vulnerabilities' not in st.session_state['nessus_data']:
-        st.warning("No vulnerability data available. Please fetch data from Nessus first.")
-        return
-
-    vulnerabilities = st.session_state['nessus_data']['vulnerabilities']
-    vuln_levels = ['Critical', 'High', 'Medium', 'Low', 'Info']
-    vuln_counts = [vulnerabilities.get(level, 0) for level in vuln_levels]
-    nist_functions = ['Identify', 'Protect', 'Detect', 'Respond', 'Recover', 'Govern']
-
-    # ส่วนที่ 1: แสดงข้อมูลช่องโหว่ตามระดับความรุนแรง
-    st.subheader("Summary of Vulnerability Severity Levels")
-    vuln_df = pd.DataFrame({
-        'Severity': vuln_levels,
-        'Count': vuln_counts
-    })
-    severity_colors = {
-        'Critical': 'red',
-        'High': 'orange',
-        'Medium': 'yellow',
-        'Low': 'lightgreen',
-        'Info': 'gray'
-    }
-    if sum(vuln_counts) > 0:
-        fig_vuln = px.bar(vuln_df, x='Severity', y='Count', title='Number of Vulnerabilities by Severity', text='Count',
-                          color='Severity', color_discrete_map=severity_colors)
-        fig_vuln.update_traces(textposition='outside')
-        st.plotly_chart(fig_vuln)
+    # ปรับเกณฑ์การกำหนด Tier
+    if avg_score >= 3.75:  # เพิ่มเกณฑ์
+        return 'Tier 4'
+    elif avg_score >= 3.25:  # ปรับเกณฑ์
+        return 'Tier 3'
+    elif avg_score >= 2.5:  # ปรับเกณฑ์
+        return 'Tier 2'
     else:
-        st.warning("Insufficient vulnerability data to display the graph.")
+        return 'Tier 1'
 
-    # ส่วนที่ 2: แสดงค่าฟังก์ชัน NIST CSF 2.0
-    st.subheader("NIST CSF 2.0 Function Scores")
-    if 'metrics' in st.session_state:
-        metrics = st.session_state['metrics']
-        nist_scores = [metrics.get(func.lower(), 0) for func in nist_functions]
-        nist_df = pd.DataFrame({
-            'Function': nist_functions,
-            'Score': nist_scores
-        })
-        fig_nist = px.bar(nist_df, x='Function', y='Score', title='NIST CSF 2.0 Function Scores', range_y=[0,4], text='Score')
-        fig_nist.update_traces(textposition='outside', marker_color='steelblue')
-        st.plotly_chart(fig_nist)
-    else:
-        st.warning("No NIST CSF 2.0 scores available. Please input data in the Data Input page.")
+def simulate_attack(current_scores: Dict[str, float], attack_type: str) -> Dict:
+    """Simulate attack impact on scores."""
+    impact_factors = ATTACK_SCENARIOS[attack_type]['impact_factors']
+    post_attack_scores = {}
+    impact = {}
 
-    # ส่วนที่ 3: แสดงความสัมพันธ์ระหว่างช่องโหว่และฟังก์ชัน NIST CSF 2.0
-    st.subheader("Relationship between Vulnerabilities and NIST CSF Functions")
-    # สมมุติความสัมพันธ์ระหว่างระดับความรุนแรงกับฟังก์ชัน NIST CSF 2.0
-    vuln_nist_relation = {
-        'Critical': [0.9, 0.9, 0.8, 0.7, 0.6, 0.8],
-        'High': [0.7, 0.8, 0.6, 0.5, 0.4, 0.6],
-        'Medium': [0.5, 0.6, 0.4, 0.3, 0.3, 0.4],
-        'Low': [0.3, 0.4, 0.2, 0.2, 0.2, 0.2],
-        'Info': [0.1, 0.2, 0.1, 0.1, 0.1, 0.1]
+    for func in current_scores.keys():
+        # Calculate impact
+        impact[func] = current_scores[func] * impact_factors[func]
+        # Calculate post-attack score
+        post_attack_scores[func] = max(1.0, current_scores[func] - impact[func])
+        post_attack_scores[func] = round(post_attack_scores[func], 2)
+
+    return {
+        'original_scores': current_scores,
+        'post_attack_scores': post_attack_scores,
+        'impact': impact,
+        'attack_type': attack_type
     }
+# Assessment Model Class
+class NISTAssessmentModel:
+    def __init__(self):
+        self.model = None
+        self.scaler = None
+        self.history = self.load_history()
+        self.iterations = self.load_iterations()
 
-    # สร้าง DataFrame สำหรับ Heatmap
-    data = []
-    for severity in vuln_levels:
-        for idx, function in enumerate(nist_functions):
-            data.append({
-                'Severity': severity,
-                'Function': function,
-                'Impact': vuln_nist_relation[severity][idx] * vulnerabilities.get(severity, 0)
-            })
+    def load_history(self):
+        if os.path.exists('history.pkl'):
+            with open('history.pkl', 'rb') as f:
+                return pickle.load(f)
+        return []
 
-    impact_df = pd.DataFrame(data)
+    def save_history(self):
+        with open('history.pkl', 'wb') as f:
+            pickle.dump(self.history, f)
 
-    # สร้าง Heatmap
-    impact_pivot = impact_df.pivot(index='Severity', columns='Function', values='Impact')
-    fig_heatmap = px.imshow(
-        impact_pivot,
-        labels=dict(x="NIST CSF 2.0 Functions", y="Severity Level", color="Impact"),
-        x=nist_functions,
-        y=vuln_levels,
-        color_continuous_scale='Reds'
-    )
-    fig_heatmap.update_layout(title="Impact of Vulnerabilities on NIST CSF 2.0 Functions")
-    st.plotly_chart(fig_heatmap)
+    def load_iterations(self):
+        if os.path.exists('iterations.txt'):
+            with open('iterations.txt', 'r') as f:
+                return int(f.read())
+        return 0
 
-def traditional_comparison():
-    st.header("Comparison with Traditional Assessment")
+    def save_iterations(self):
+        with open('iterations.txt', 'w') as f:
+            f.write(str(self.iterations))
 
-    if 'metrics' not in st.session_state:
-        st.warning("No AI assessment data available. Please perform risk assessment first.")
-        return
+    def prepare_data(self, nessus_files: List[str]) -> Tuple[np.ndarray, np.ndarray]:
+        """Prepare training data with enhanced feature engineering."""
+        X = []
+        y = []
+        
+        for file_path in nessus_files:
+            data = parse_nessus_file(file_path)
+            if data['status'] == 'success':
+                scores = calculate_nist_scores(data)
+                features = self.extract_features(data, scores)
+                tier = determine_tier(scores)
+                
+                X.append(features)
+                y.append(tier)
 
-    traditional_assessment = {}
-    for function in ['Identify', 'Protect', 'Detect', 'Respond', 'Recover', 'Govern']:
-        traditional_assessment[function] = st.slider(f"Traditional {function} Score", 1, 4, 2)
+        return np.array(X), np.array(y)
 
-    ai_assessment = {k.capitalize(): v for k, v in st.session_state['metrics'].items() if k in ['identify', 'protect', 'detect', 'respond', 'recover', 'govern']}
+    def extract_features(self, data: Dict, scores: Dict[str, float]) -> List[float]:
+        """Extract enhanced feature set for training."""
+        features = []
 
-    comparison_data = pd.DataFrame({
-        'Function': ai_assessment.keys(),
-        'AI Assessment': ai_assessment.values(),
-        'Traditional Assessment': [traditional_assessment.get(func, 0) for func in ai_assessment.keys()]
-    })
+        # Function scores
+        features.extend([scores[func] for func in NIST_FUNCTIONS.keys()])
 
-    fig = px.bar(comparison_data, x='Function', y=['AI Assessment', 'Traditional Assessment'],
-                 title="Comparison of AI and Traditional Assessments",
-                 barmode='group')
-    st.plotly_chart(fig)
+        # Vulnerability counts
+        vuln_data = data['vulnerabilities']
+        features.extend([vuln_data[sev] for sev in ['Critical', 'High', 'Medium', 'Low', 'Info']])
 
-def enhanced_attack_simulation():
-    st.header("Advanced Attack Simulation")
+        # Security metrics
+        for func in NIST_FUNCTIONS.keys():
+            metrics = data['security_metrics'][func]
+            features.append(metrics['controls'])
+            features.append(metrics['findings'])
+            
+            # Add derived metrics
+            ratio = metrics['controls'] / max(metrics['findings'], 1)
+            features.append(ratio)
 
-    if 'metrics' not in st.session_state:
-        st.error("No assessment data available. Please perform risk assessment first.")
-        return
+        return features
 
-    if 'model' not in st.session_state or 'scaler' not in st.session_state:
-        st.error("No AI model available. Please fetch data from Nessus and create the model first.")
-        return
+    def balance_data(self, X: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Balance dataset using duplicate sampling for minority classes."""
+        class_counts = Counter(y)
+        max_samples = max(class_counts.values())
+        
+        X_balanced = []
+        y_balanced = []
+        
+        for tier in class_counts.keys():
+            tier_idx = np.where(y == tier)[0]
+            n_samples = len(tier_idx)
+            
+            if n_samples < max_samples:
+                n_duplicates = max_samples - n_samples
+                duplicate_idx = np.random.choice(tier_idx, size=n_duplicates, replace=True)
+                tier_idx = np.concatenate([tier_idx, duplicate_idx])
+            
+            X_balanced.extend(X[tier_idx])
+            y_balanced.extend([tier] * len(tier_idx))
+        
+        return np.array(X_balanced), np.array(y_balanced)
 
-    attack_types = {
-        "Ransomware": {"identify": -2, "protect": -3, "detect": -1, "respond": -2, "recover": -3, "govern": -1},
-        "DDoS": {"identify": -1, "protect": -2, "detect": -2, "respond": -3, "recover": -1, "govern": -1},
-        "Phishing": {"identify": -1, "protect": -2, "detect": -1, "respond": -1, "recover": -1, "govern": -2},
-        "SQL Injection": {"identify": -2, "protect": -3, "detect": -2, "respond": -2, "recover": -2, "govern": -1}
-    }
+    def train(self, nessus_files: List[str]) -> Dict:
+        """Train model with balanced data and enhanced parameters."""
+        X, y = self.prepare_data(nessus_files)
+        
+        if len(X) < 30:
+            return {'status': 'error', 'message': 'Need at least 30 files for training'}
 
-    selected_attack = st.selectbox("Select Attack Type", list(attack_types.keys()))
+        # Show initial class distribution
+        st.write("Initial class distribution:", Counter(y))
 
-    if st.button("Simulate Attack"):
-        current_assessment = st.session_state['metrics'].copy()
-        impact = attack_types[selected_attack]
+        # Balance dataset
+        X_balanced, y_balanced = self.balance_data(X, y)
+        st.write("Balanced class distribution:", Counter(y_balanced))
 
-        # Apply impact
-        for func, change in impact.items():
-            if func in current_assessment:
-                current_assessment[func] = max(1, current_assessment[func] + change)
-
-        st.subheader(f"Impact of {selected_attack} Attack on NIST CSF 2.0 Functions")
-
-        functions = ['Identify', 'Protect', 'Detect', 'Respond', 'Recover', 'Govern']
-        before_attack = [st.session_state['metrics'][func.lower()] for func in functions]
-        after_attack = [current_assessment[func.lower()] for func in functions]
-
-        # แสดงกราฟ Before Attack
-        fig_before = go.Figure()
-        fig_before.add_trace(go.Bar(
-            x=functions,
-            y=before_attack,
-            name='Before Attack',
-            marker_color='steelblue'
-        ))
-        fig_before.update_layout(
-            title="NIST CSF 2.0 Function Scores Before Attack",
-            xaxis_title="NIST CSF 2.0 Functions",
-            yaxis_title="Score",
-            yaxis=dict(range=[0,4])
+        # Split data
+        X_train, X_temp, y_train, y_temp = train_test_split(
+            X_balanced, y_balanced, test_size=0.3, random_state=42, stratify=y_balanced
         )
-        st.plotly_chart(fig_before)
-
-        # แสดงกราฟ After Attack
-        fig_after = go.Figure()  # สร้าง fig_after ใหม่ตรงนี้
-        fig_after.add_trace(go.Bar(
-            x=functions,
-            y=after_attack,
-            name='After Attack',
-            marker_color='crimson'
-        ))
-        fig_after.update_layout(
-            title="NIST CSF 2.0 Function Scores After Attack",
-            xaxis_title="NIST CSF 2.0 Functions",
-            yaxis_title="Score",
-            yaxis=dict(range=[0,4])
+        X_val, X_test, y_val, y_test = train_test_split(
+            X_temp, y_temp, test_size=0.5, random_state=42, stratify=y_temp
         )
-        st.plotly_chart(fig_after)
 
-        # สร้างกราฟ Delta Impact
-        impact_delta = np.array(after_attack) - np.array(before_attack)
-        fig_delta = go.Figure()
-        fig_delta.add_trace(go.Bar(
-            x=functions,
-            y=impact_delta,
-            name='Change',
-            marker_color='darkorange'
-        ))
-        fig_delta.update_layout(
-            title="Change in NIST CSF 2.0 Function Scores (After - Before Attack)",
-            xaxis_title="NIST CSF 2.0 Functions",
-            yaxis_title="Score Change",
-            yaxis=dict(range=[-4,4])
-        )
-        st.plotly_chart(fig_delta)
+        # Scale features
+        self.scaler = StandardScaler()
+        X_train_scaled = self.scaler.fit_transform(X_train)
+        X_val_scaled = self.scaler.transform(X_val)
+        X_test_scaled = self.scaler.transform(X_test)
 
-        # Perform risk assessment with new metrics
-        model = st.session_state['model']
-        scaler = st.session_state['scaler']
-
-        input_data = np.array([[current_assessment.get('identify', 1), current_assessment.get('protect', 1),
-                                current_assessment.get('detect', 1), current_assessment.get('respond', 1),
-                                current_assessment.get('recover', 1), current_assessment.get('govern', 1),
-                                current_assessment.get('Critical', 0), current_assessment.get('High', 0),
-                                current_assessment.get('Medium', 0), current_assessment.get('Low', 0),
-                                current_assessment.get('Info', 0)]], dtype=np.float64)
-
-        input_scaled = scaler.transform(input_data)
-        risk_proba = model.predict_proba(input_scaled)[0]
-        risk_levels = model.classes_
-        max_prob_idx = np.argmax(risk_proba)
-        new_risk_level = risk_levels[max_prob_idx]
-
-        # ตรวจสอบระดับความเสี่ยงให้ครบถ้วน
-        expected_risk_levels = ['Low', 'Medium', 'High']
-        for level in expected_risk_levels:
-            if level not in risk_levels:
-                risk_levels = np.append(risk_levels, level)
-                risk_proba = np.append(risk_proba, 0)
-
-        # จัดเรียงระดับความเสี่ยง
-        order = [expected_risk_levels.index(level) for level in risk_levels]
-        risk_levels = risk_levels[order]
-        risk_proba = risk_proba[order]
-
-        st.subheader("Risk Assessment After Attack")
-        st.write(f"New predicted risk level: {new_risk_level}")
-
-        # กำหนดสีสำหรับระดับความเสี่ยง
-        risk_color_mapping = {
-            'Low': 'lightgreen',
-            'Medium': 'orange',
-            'High': 'red'
+        # Configure and train model
+        param_grid = {
+            'n_estimators': [100, 200],
+            'max_depth': [None, 10, 20],
+            'min_samples_split': [2, 5],
+            'min_samples_leaf': [1, 2],
+            'class_weight': ['balanced', 'balanced_subsample']
         }
 
-        fig = go.Figure(data=[go.Bar(
-            x=risk_levels,
-            y=risk_proba,
-            marker_color=[risk_color_mapping.get(level, 'gray') for level in risk_levels]
-        )])
-        fig.update_layout(
-            title="Probability of New Risk Levels",
-            xaxis_title="Risk Levels",
-            yaxis_title="Probability",
-            yaxis=dict(range=[0,1])
-        )
-        st.plotly_chart(fig)
+        rf = RandomForestClassifier(random_state=42)
+        grid_search = GridSearchCV(rf, param_grid, cv=3, scoring='balanced_accuracy')
+        grid_search.fit(X_train_scaled, y_train)
 
-def trend_analysis_and_prediction():
-    st.header("Trend Analysis and Prediction")
+        self.model = grid_search.best_estimator_
 
-    # ในสถานการณ์จริง คุณควรใช้ข้อมูลประวัติจริง
-    historical_data = pd.DataFrame({
-        'Date': pd.date_range(start='1/1/2023', periods=12, freq='M'),
-        'Risk_Score': np.random.randint(50, 100, 12)
-    })
+        # Evaluate model
+        train_acc = balanced_accuracy_score(y_train, self.model.predict(X_train_scaled))
+        val_acc = balanced_accuracy_score(y_val, self.model.predict(X_val_scaled))
+        test_acc = balanced_accuracy_score(y_test, self.model.predict(X_test_scaled))
 
-    fig = px.line(historical_data, x='Date', y='Risk_Score', title='Historical Risk Trend')
-    st.plotly_chart(fig)
+        # Save model
+        with open('model.pkl', 'wb') as f:
+            pickle.dump((self.model, self.scaler), f)
 
-    X = np.array(range(len(historical_data))).reshape(-1, 1)
-    y = historical_data['Risk_Score'].values
+        self.iterations += 1
+        self.save_iterations()
 
-    model = LinearRegression()
-    model.fit(X, y)
+        return {
+            'status': 'success',
+            'train_accuracy': train_acc,
+            'val_accuracy': val_acc,
+            'test_accuracy': test_acc,
+            'best_params': grid_search.best_params_,
+            'samples': len(X_balanced)
+        }
 
-    future_dates = pd.date_range(start=historical_data['Date'].max(), periods=6, freq='M')[1:]
-    future_X = np.array(range(len(historical_data), len(historical_data) + len(future_dates))).reshape(-1, 1)
-    future_y = model.predict(future_X)
+    def predict(self, data: Dict) -> Dict:
+        """Make prediction with detailed analysis."""
+        if not self.model:
+            if not self.load_model():
+                return {'status': 'error', 'message': 'Model not trained'}
 
-    future_df = pd.DataFrame({'Date': future_dates, 'Risk_Score': future_y})
+        scores = calculate_nist_scores(data)
+        features = self.extract_features(data, scores)
 
-    combined_df = pd.concat([historical_data, future_df], ignore_index=True)
+        X = np.array([features])
+        X_scaled = self.scaler.transform(X)
 
-    fig = px.line(combined_df, x='Date', y='Risk_Score', title='Risk Trend and Forecast')
-    st.plotly_chart(fig)
+        tier = self.model.predict(X_scaled)[0]
+        proba = self.model.predict_proba(X_scaled)[0]
+        confidence = max(proba)
 
-def generate_report_and_recommendations():
-    st.header("Report and Recommendations")
+        analysis = self.generate_analysis(scores, tier)
+        recommendations = self.generate_recommendations(scores, tier)
 
-    if 'metrics' not in st.session_state:
-        st.error("No assessment data available. Please perform risk assessment first.")
+        assessment = {
+            'status': 'success',
+            'timestamp': datetime.now().isoformat(),
+            'scores': scores,
+            'tier': tier,
+            'confidence': confidence,
+            'analysis': analysis,
+            'recommendations': recommendations
+        }
+
+        self.history.append(assessment)
+        self.save_history()
+
+        return assessment
+
+    def generate_analysis(self, scores: Dict[str, float], tier: str) -> Dict:
+        """Generate detailed analysis of assessment results."""
+        analysis = {}
+
+        # Overall analysis
+        analysis['overall'] = {
+            'score': sum(scores.values()) / len(scores),
+            'tier': tier,
+            'description': IMPLEMENTATION_TIERS[tier]['description'],
+            'characteristics': IMPLEMENTATION_TIERS[tier]['characteristics']
+        }
+
+        # Function-specific analysis
+        for func in NIST_FUNCTIONS.keys():
+            analysis[func] = {
+                'score': scores[func],
+                'weight': NIST_FUNCTIONS[func]['weight'],
+                'categories': NIST_FUNCTIONS[func]['categories']
+            }
+
+        return analysis
+
+    def generate_recommendations(self, scores: Dict[str, float], tier: str) -> List[str]:
+        """Generate prioritized recommendations based on scores."""
+        recommendations = []
+        
+        # Sort functions by score (ascending) to prioritize weak areas
+        sorted_scores = sorted(scores.items(), key=lambda x: x[1])
+        
+        for func, score in sorted_scores:
+            if score < 2.0:
+                recommendations.append(f"Critical: Implement basic {func} controls")
+            elif score < 3.0:
+                recommendations.append(f"High: Enhance {func} capabilities")
+            elif score < 3.5:
+                recommendations.append(f"Medium: Optimize {func} processes")
+            else:
+                recommendations.append(f"Low: Maintain {func} excellence")
+
+        return recommendations
+
+    def load_model(self) -> bool:
+        """Load saved model from disk."""
+        if os.path.exists('model.pkl'):
+            with open('model.pkl', 'rb') as f:
+                self.model, self.scaler = pickle.load(f)
+            return True
+        return False
+# UI Functions
+def show_upload_section():
+    """Handle file upload and model training."""
+    st.header("Upload Nessus Files for Training")
+    
+    if 'uploaded_files' not in st.session_state:
+        st.session_state['uploaded_files'] = []
+
+    uploaded_files = st.file_uploader(
+        "Upload .nessus files (Minimum 30 required)",
+        type=['nessus'],
+        accept_multiple_files=True
+    )
+
+    if uploaded_files:
+        # Check for duplicates
+        new_files = []
+        existing_names = [f.name for f in st.session_state['uploaded_files']]
+        
+        for file in uploaded_files:
+            if file.name not in existing_names:
+                new_files.append(file)
+                existing_names.append(file.name)
+            else:
+                st.warning(f"File {file.name} already uploaded")
+
+        st.session_state['uploaded_files'].extend(new_files)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.info(f"Total files: {len(st.session_state['uploaded_files'])}")
+        with col2:
+            if len(st.session_state['uploaded_files']) >= 30:
+                st.success("Minimum requirement met")
+            else:
+                st.warning(f"Need {30 - len(st.session_state['uploaded_files'])} more files")
+
+        if len(st.session_state['uploaded_files']) >= 30:
+            if st.button("Train Model", type="primary"):
+                with st.spinner("Training model..."):
+                    process_files(st.session_state['uploaded_files'])
+                st.session_state['uploaded_files'] = []  # Clear after processing
+
+def process_files(uploaded_files):
+    """Process uploaded files and train model."""
+    temp_paths = []
+    progress = st.progress(0)
+    status = st.empty()
+
+    try:
+        # Save files temporarily
+        for i, file in enumerate(uploaded_files):
+            temp_path = f"temp_{file.name}_{i}"
+            with open(temp_path, 'wb') as f:
+                f.write(file.getvalue())
+            temp_paths.append(temp_path)
+            progress.progress((i + 1) / len(uploaded_files))
+            status.text(f"Processing: {i+1}/{len(uploaded_files)}")
+
+        # Train model
+        model = NISTAssessmentModel()
+        result = model.train(temp_paths)
+        
+        if result['status'] == 'success':
+            st.session_state['model'] = model
+            
+            # Show training results
+            st.success("Model trained successfully!")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Training Accuracy", f"{result['train_accuracy']:.2%}")
+            with col2:
+                st.metric("Validation Accuracy", f"{result['val_accuracy']:.2%}")
+            with col3:
+                st.metric("Test Accuracy", f"{result['test_accuracy']:.2%}")
+            
+            st.write("Best parameters:", result['best_params'])
+        else:
+            st.error(result['message'])
+
+    finally:
+        # Cleanup
+        for path in temp_paths:
+            if os.path.exists(path):
+                os.remove(path)
+
+def show_assessment_section():
+    """Handle individual assessments."""
+    st.header("Cybersecurity Assessment")
+    
+    if 'model' not in st.session_state:
+        st.session_state['model'] = NISTAssessmentModel()
+        st.session_state['model'].load_model()
+    
+    if not st.session_state['model'].model:
+        st.warning("Please train model first")
         return
 
-    current_assessment = st.session_state['metrics']
+    uploaded_file = st.file_uploader("Upload Nessus file for assessment", type=['nessus'])
+    if uploaded_file:
+        temp_path = f"temp_assessment_{uploaded_file.name}"
+        try:
+            with open(temp_path, 'wb') as f:
+                f.write(uploaded_file.getvalue())
+            
+            with st.spinner("Analyzing..."):
+                data = parse_nessus_file(temp_path)
+                if data['status'] == 'success':
+                    prediction = st.session_state['model'].predict(data)
+                    show_assessment_results(prediction)
+                    st.session_state['latest_assessment'] = prediction
+                else:
+                    st.error(data['message'])
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
-    st.subheader("Summary Report")
-    for func, score in current_assessment.items():
-        if func in ['identify', 'protect', 'detect', 'respond', 'recover', 'govern']:
-            st.write(f"{func.capitalize()}: {score}/4")
-
-    st.subheader("Recommendations")
-    recommendations = {
-        "identify": "Improve asset management and risk assessment processes.",
-        "protect": "Enhance access controls and conduct regular security training.",
-        "detect": "Upgrade intrusion detection systems and improve log monitoring.",
-        "respond": "Develop and regularly test incident response plans.",
-        "recover": "Implement robust backup and disaster recovery solutions.",
-        "govern": "Establish clear cybersecurity policies and conduct regular audits."
-    }
-
-    for func, score in current_assessment.items():
-        if func in recommendations and score < 3:
-            st.write(f"**{func.capitalize()}:** {recommendations[func]}")
-
-    # Add overall risk level if available
-    if 'risk_level' in st.session_state:
-        st.subheader("Overall Risk Assessment")
-        st.write(f"Current risk level: {st.session_state['risk_level']}")
-
-    # เพิ่มสรุปช่องโหว่ถ้ามี
-    if 'nessus_data' in st.session_state and 'vulnerabilities' in st.session_state['nessus_data']:
-        st.subheader("Vulnerability Summary")
-        vulnerabilities = st.session_state['nessus_data']['vulnerabilities']
-        for severity, count in vulnerabilities.items():
-            st.write(f"{severity}: {count}")
-
-    # เพิ่มข้อมูลเชิงลึกเพิ่มเติม
-    st.subheader("Additional Insights")
-    st.write("Based on the current assessment, consider the following general recommendations:")
-    st.write("1. Regularly update and patch all systems and software.")
-    st.write("2. Implement multi-factor authentication for all critical systems.")
-    st.write("3. Conduct regular cybersecurity training for all employees.")
-    st.write("4. Perform continuous penetration testing and vulnerability assessments.")
-    st.write("5. Develop and maintain incident response plans, and test them regularly.")
-
-def questionnaire():
-    st.header("แบบสอบถามประเมินประสิทธิภาพระบบ AI")
-
-    st.write("""
-    แบบสอบถามนี้เป็นส่วนหนึ่งของการวิจัยเรื่อง "การศึกษาวิเคราะห์และการพัฒนาระบบปัญญาประดิษฐ์เพื่อประเมินความมั่นคงปลอดภัยไซเบอร์โดยประยุกต์ใช้ NIST Cybersecurity Framework 2.0 และ Nessus Vulnerability Scanner"
+def show_assessment_results(assessment: Dict):
+    """Display assessment results with visualizations."""
+    # Overall Results
+    col1, col2 = st.columns(2)
     
-    เราต้องการความคิดเห็นของคุณเพื่อปรับปรุงระบบของเรา!
-    """)
+    with col1:
+        st.subheader("NIST CSF Scores")
+        fig = go.Figure(data=go.Scatterpolar(
+            r=list(assessment['scores'].values()),
+            theta=[f.capitalize() for f in assessment['scores'].keys()],
+            fill='toself'
+        ))
+        fig.update_layout(
+            polar={'radialaxis': {'range': [1, 4]}},
+            title="Function Scores"
+        )
+        st.plotly_chart(fig)
+    
+    with col2:
+        st.subheader("Implementation Tier")
+        tier_info = IMPLEMENTATION_TIERS[assessment['tier']]
+        
+        st.metric("Current Tier", f"{tier_info['name']} ({assessment['tier']})")
+        st.metric("Confidence", f"{assessment['confidence']:.1%}")
+        
+        st.write("**Description:**", tier_info['description'])
+        
+        st.write("**Characteristics:**")
+        for char in tier_info['characteristics']:
+            st.write(f"- {char}")
 
-    st.info("""
-    แบบสอบถามนี้ประกอบด้วยคำถามเกี่ยวกับ:
-    1. ข้อมูลทั่วไปของผู้ตอบแบบสอบถาม
-    2. การประเมินระบบ AI
-    3. การประเมินตามฟังก์ชันของ NIST CSF 2.0
-    4. การเปรียบเทียบกับวิธีการประเมินแบบดั้งเดิม
-    5. ความคิดเห็นและข้อเสนอแนะเพิ่มเติม
-    """)
+    # Detailed Analysis
+    st.subheader("Detailed Analysis")
+    
+    for func in NIST_FUNCTIONS.keys():
+        with st.expander(f"{func.capitalize()} Analysis", expanded=(func == 'identify')):
+            if func in assessment['analysis']:
+                analysis = assessment['analysis'][func]
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Score", f"{analysis['score']:.2f}")
+                    st.metric("Weight", f"{NIST_FUNCTIONS[func]['weight']:.1f}")
+                with col2:
+                    st.write("**Categories:**")
+                    for cat in NIST_FUNCTIONS[func]['categories']:
+                        st.write(f"- {cat}")
 
-    st.warning("การตอบแบบสอบถามนี้จะใช้เวลาประมาณ 10-15 นาที")
+    # Recommendations
+    st.subheader("Recommendations")
+    recommendations = sorted(
+        assessment['recommendations'],
+        key=lambda x: (
+            0 if x.startswith("Critical") else
+            1 if x.startswith("High") else
+            2 if x.startswith("Medium") else 3
+        )
+    )
+    for rec in recommendations:
+        st.info(rec)
 
-    # แทนที่ URL นี้ด้วยลิงค์จริงของแบบสอบถามของคุณ
-    survey_link = "https://docs.google.com/forms/d/e/1FAIpQLSe0jn6OSbGW7epTTy2JY5w_QS-jFytZbvdQ-p_sVa4GvIk6rg/viewform?vc=0&c=0&w=1&flr=0"
-
-    if st.button("คลิกที่นี่เพื่อไปยังแบบสอบถาม"):
-        st.markdown(f"[คลิกเพื่อเปิดแบบสอบถามในแท็บใหม่]({survey_link})")
-        st.write("หากลิงค์ไม่ทำงาน กรุณาคัดลอกและวางลิงค์ต่อไปนี้ในเบราว์เซอร์ของคุณ:")
-        st.code(survey_link)
-
-def main():
-    st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to", ["Home", "Connect to Nessus", "Organization Info", "Data Input",
-                                      "Risk Assessment", "NIST CSF Analysis", "Traditional Comparison",
-                                      "Attack Simulation", "Trend Analysis", "Report", "Questionnaire"])
-
-    if page == "Home":
-        st.title("AI-powered Cybersecurity Risk Assessment using NIST CSF 2.0")
-        st.write("Welcome to the AI-powered Cybersecurity Risk Assessment application using NIST CSF 2.0. Use the sidebar to navigate through different sections of the application.")
-
-    elif page == "Connect to Nessus":
-        st.header("Connect to Nessus")
-
-        nessus_url = st.text_input("Nessus URL", value="https://localhost:8834")
-        access_key = st.text_input("Access Key", value="your_access_key_here")
-        secret_key = st.text_input("Secret Key", value="your_secret_key_here", type="password")
-        scan_id = st.number_input("Scan ID", min_value=1, value=1)
-
-        show_data = False  # Initialize show_data
-
-        saved_data = load_data_from_json()
-        if saved_data is not None:
-            if 'nessus_data' not in st.session_state:
-                st.session_state['nessus_data'] = saved_data
-
-        if st.button("Use Existing Data"):
-            if 'nessus_data' in st.session_state:
-                vulnerabilities = st.session_state['nessus_data']['vulnerabilities']
-                hosts_data = st.session_state['nessus_data']['hosts_data']
-
-                # Check if 'nist_scores' exists
-                if 'nist_scores' in st.session_state['nessus_data']:
-                    nist_scores = st.session_state['nessus_data']['nist_scores']
-                else:
-                    st.warning("'nist_scores' not found in existing data. Calculating now.")
-                    nist_scores = calculate_nist_scores(vulnerabilities)
-                    st.session_state['nessus_data']['nist_scores'] = nist_scores
-                    save_data_to_json(st.session_state['nessus_data'])  # Save updated data
-
-                st.success("Loaded data from JSON file")
-                st.write("Current Host Data:", hosts_data)
-                show_data = True
-
-                # Create and store the model and scaler using existing data
-                model, scaler = create_model(hosts_data, nist_scores)
-                if model and scaler:
-                    st.session_state['model'] = model
-                    st.session_state['scaler'] = scaler
-                    st.success("Model created and stored in session state")
-                else:
-                    st.error("Unable to create model from existing data")
-            else:
-                st.error("No existing data found. Please fetch new data from Nessus.")
-
-        if st.button("Test Nessus Connection"):
-            success, message = test_nessus_connection(nessus_url, access_key, secret_key)
-            if success:
-                st.success(message)
-            else:
-                st.error(message)
-
-        if st.button("Fetch New Nessus Data"):
-            result = get_nessus_data(nessus_url, access_key, secret_key, scan_id)
-            if isinstance(result, tuple) and len(result) == 3:
-                vulnerabilities, hosts_data, nist_scores = result
-                st.session_state['nessus_data'] = {'vulnerabilities': vulnerabilities, 'hosts_data': hosts_data, 'nist_scores': nist_scores}
-                save_data_to_json(st.session_state['nessus_data'])
-                st.success("Fetched and saved new Nessus data")
-                st.write("Current Host Data:", hosts_data)
-                show_data = True
-
-                # Create and store the model and scaler
-                model, scaler = create_model(hosts_data, nist_scores)
-                if model and scaler:
-                    st.session_state['model'] = model
-                    st.session_state['scaler'] = scaler
-                    st.success("Model created and stored in session state")
-                else:
-                    st.error("Unable to create model from new data")
-            else:
-                st.error(result)
-                show_data = False
-
-        if show_data:
-            if 'nessus_data' in st.session_state:
-                vulnerabilities = st.session_state['nessus_data']['vulnerabilities']
-                hosts_data = st.session_state['nessus_data']['hosts_data']
-
-                st.subheader("Vulnerability Summary")
-                vuln_levels = ['Critical', 'High', 'Medium', 'Low', 'Info']
-                vuln_counts = [vulnerabilities.get(level, 0) for level in vuln_levels]
-                severity_colors = {
-                    'Critical': 'red',
-                    'High': 'orange',
-                    'Medium': 'yellow',
-                    'Low': 'lightgreen',
-                    'Info': 'gray'
-                }
-
-                vuln_df = pd.DataFrame({
-                    'Severity': vuln_levels,
-                    'Count': vuln_counts
-                })
-
-                if sum(vuln_counts) > 0:
-                    fig_vuln = px.pie(vuln_df, names='Severity', values='Count', title='Distribution of Vulnerabilities',
-                                      color='Severity', color_discrete_map=severity_colors)
-                    st.plotly_chart(fig_vuln)
-                else:
-                    st.warning("Insufficient vulnerability data to display the graph.")
-
-                st.subheader("Host Data")
-                st.dataframe(pd.DataFrame(hosts_data))
-            else:
-                st.warning("No Nessus data available. Please fetch new data or use existing data.")
-
-    elif page == "Organization Info":
-        st.header("Organization Information")
-
-        org_name = st.text_input("Organization Name")
-        org_size = st.selectbox("Organization Size", ["Small", "Medium", "Large"])
-        industry = st.selectbox("Industry", ["Finance", "Healthcare", "Technology", "Retail", "Manufacturing", "Other"])
-        contact_name = st.text_input("Contact Name")
-        contact_email = st.text_input("Contact Email")
-
-        if st.button("Save Organization Info"):
-            st.session_state['org_info'] = {
-                'name': org_name,
-                'size': org_size,
-                'industry': industry,
-                'contact_name': contact_name,
-                'contact_email': contact_email
-            }
-            st.success("Organization information saved!")
-
-    elif page == "Data Input":
-        st.header("Data Input")
-
-        if 'org_info' not in st.session_state:
-            st.warning("Please enter organization information first.")
-        else:
-            st.subheader("NIST CSF 2.0 Capabilities")
-            metrics = {}
-            default_scores = {
-                'identify': 3,
-                'protect': 2,
-                'detect': 4,
-                'respond': 2,
-                'recover': 3,
-                'govern': 1
-            }
-            for metric in ['identify', 'protect', 'detect', 'respond', 'recover', 'govern']:
-                metrics[metric] = st.slider(f"{metric.capitalize()} Capability", 1, 4, default_scores.get(metric, 3))
-
-            st.subheader("Vulnerability Data")
-            if 'nessus_data' in st.session_state:
-                vulnerabilities = st.session_state['nessus_data']['vulnerabilities']
-                total_vulns = sum(vulnerabilities.get(severity, 0) for severity in ['Critical', 'High', 'Medium', 'Low'])
-                st.write(f"Total vulnerabilities found: {total_vulns}")
-                for severity in ['Critical', 'High', 'Medium', 'Low', 'Info']:
-                    metrics[severity] = st.number_input(f"{severity} Vulnerabilities", 0, 1000, vulnerabilities.get(severity, 0))
-            else:
-                for severity in ['Critical', 'High', 'Medium', 'Low', 'Info']:
-                    metrics[severity] = st.number_input(f"{severity} Vulnerabilities", 0, 1000, 0)
-
-            if st.button("Save Data"):
-                st.session_state['metrics'] = metrics
-                st.success("Data saved!")
-
-    elif page == "Risk Assessment":
-        st.header("Risk Assessment")
-
-        if 'metrics' not in st.session_state:
-            st.error("Please input data in the Data Input page first.")
-        elif 'model' not in st.session_state or 'scaler' not in st.session_state:
-            st.error("Please fetch data from Nessus to create and train the model first.")
-        else:
-            metrics = st.session_state['metrics']
-            model = st.session_state['model']
-            scaler = st.session_state['scaler']
-
-            input_data = np.array([[metrics.get('identify', 1), metrics.get('protect', 1), metrics.get('detect', 1),
-                                    metrics.get('respond', 1), metrics.get('recover', 1), metrics.get('govern', 1),
-                                    metrics.get('Critical', 0), metrics.get('High', 0), metrics.get('Medium', 0),
-                                    metrics.get('Low', 0), metrics.get('Info', 0)]], dtype=np.float64)
-
-            input_scaled = scaler.transform(input_data)
-            try:
-                risk_proba = model.predict_proba(input_scaled)[0]
-                risk_levels = model.classes_
-                max_prob_idx = np.argmax(risk_proba)
-                risk_level = risk_levels[max_prob_idx]
-
-                # ตรวจสอบระดับความเสี่ยงให้ครบถ้วน
-                expected_risk_levels = ['Low', 'Medium', 'High']
-                for level in expected_risk_levels:
-                    if level not in risk_levels:
-                        risk_levels = np.append(risk_levels, level)
-                        risk_proba = np.append(risk_proba, 0)
-
-                # จัดเรียงระดับความเสี่ยง
-                order = [expected_risk_levels.index(level) for level in risk_levels]
-                risk_levels = risk_levels[order]
-                risk_proba = risk_proba[order]
-
-                st.session_state['risk_level'] = risk_level
-                st.session_state['risk_proba'] = risk_proba
-            except Exception as e:
-                st.error(f"Error during risk assessment: {e}")
-                risk_level = 'Unknown'
-                risk_proba = [0, 0, 0]
-
-            st.subheader("Current Risk Assessment")
-            st.write(f"Predicted risk level: {risk_level}")
-
-            # กำหนดสีสำหรับระดับความเสี่ยง
-            risk_color_mapping = {
-                'Low': 'lightgreen',
-                'Medium': 'orange',
-                'High': 'red'
-            }
-
-            fig = go.Figure(data=[go.Bar(
-                x=risk_levels,
-                y=risk_proba,
-                marker_color=[risk_color_mapping.get(level, 'gray') for level in risk_levels]
-            )])
-            fig.update_layout(
-                title="Probability of Risk Levels",
-                xaxis_title="Risk Levels",
-                yaxis_title="Probability",
-                yaxis=dict(range=[0,1])
+def show_simulation_section():
+    """Handle attack simulation scenarios."""
+    st.header("Attack Impact Simulation")
+    
+    if 'latest_assessment' not in st.session_state:
+        st.warning("Complete an assessment first")
+        return
+    
+    # Scenario selection
+    attack_type = st.selectbox(
+        "Select Attack Scenario",
+        ["Ransomware Attack", "Supply Chain Attack", "Phishing Attack", "DDoS Attack"]
+    )
+    
+    st.info(ATTACK_SCENARIOS[attack_type]['description'])
+    
+    # Show progression stages
+    with st.expander("Attack Progression"):
+        for i, stage in enumerate(ATTACK_SCENARIOS[attack_type]['progression_stages'], 1):
+            st.write(f"{i}. {stage}")
+    
+    if st.button("Run Simulation"):
+        with st.spinner("Simulating attack..."):
+            result = simulate_attack(
+                st.session_state['latest_assessment']['scores'],
+                attack_type
             )
-            st.plotly_chart(fig)
+            show_simulation_results(result)
 
-    elif page == "NIST CSF Analysis":
-        nist_csf_analysis()
+def show_simulation_results(result: Dict):
+    """Display attack simulation results."""
+    st.subheader("Impact Analysis")
+    
+    # Before/After Comparison
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Before Attack")
+        fig1 = go.Figure(data=go.Scatterpolar(
+            r=list(result['original_scores'].values()),
+            theta=[f.capitalize() for f in result['original_scores'].keys()],
+            fill='toself'
+        ))
+        fig1.update_layout(polar={'radialaxis': {'range': [1, 4]}})
+        st.plotly_chart(fig1)
+    
+    with col2:
+        st.subheader("After Attack")
+        fig2 = go.Figure(data=go.Scatterpolar(
+            r=list(result['post_attack_scores'].values()),
+            theta=[f.capitalize() for f in result['post_attack_scores'].keys()],
+            fill='toself'
+        ))
+        fig2.update_layout(polar={'radialaxis': {'range': [1, 4]}})
+        st.plotly_chart(fig2)
 
-    elif page == "Traditional Comparison":
-        traditional_comparison()
+    # Impact Details
+    st.subheader("Detailed Impact Analysis")
+    impact_df = pd.DataFrame({
+        'Function': [f.capitalize() for f in result['original_scores'].keys()],
+        'Before': list(result['original_scores'].values()),
+        'After': list(result['post_attack_scores'].values()),
+        'Impact': [result['impact'].get(f, 0) for f in result['original_scores'].keys()]
+    })
+    st.dataframe(impact_df.style.highlight_negative('Impact', axis=0))
 
-    elif page == "Attack Simulation":
-        enhanced_attack_simulation()
+    # Post-Attack Analysis
+    if 'model' in st.session_state:
+        st.subheader("Post-Attack Assessment")
+        with st.spinner("Analyzing post-attack state..."):
+            post_attack_prediction = st.session_state['model'].predict({
+                'scores': result['post_attack_scores'],
+                'vulnerabilities': st.session_state['latest_assessment'].get('vulnerabilities', {}),
+                'security_metrics': st.session_state['latest_assessment'].get('security_metrics', {})
+            })
+            
+            if post_attack_prediction['status'] == 'success':
+                st.write("**New Implementation Tier:**", post_attack_prediction['tier'])
+                st.write("**Recommendations for Recovery:**")
+                for rec in post_attack_prediction['recommendations']:
+                    st.write(f"- {rec}")
 
-    elif page == "Trend Analysis":
-        trend_analysis_and_prediction()
-
-    elif page == "Report":
-        generate_report_and_recommendations()
-
-    elif page == "Questionnaire":
-        questionnaire()
+def show_history_section():
+    """Display assessment history and trends."""
+    st.header("Assessment History")
+    
+    if 'model' not in st.session_state:
+        st.session_state['model'] = NISTAssessmentModel()
+    
+    history = st.session_state['model'].history
+    
+    if not history:
+        st.warning("No assessment history available")
+        return
+    
+    # Summary Statistics
+    st.subheader("Assessment Statistics")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Total Assessments", len(history))
+    with col2:
+        tiers = [h['tier'] for h in history]
+        st.metric("Most Common Tier", max(set(tiers), key=tiers.count))
+    with col3:
+        avg_score = np.mean([
+            sum(h['scores'].values())/len(h['scores']) 
+            for h in history
+        ])
+        st.metric("Average Score", f"{avg_score:.2f}")
+    
+    # Trend Analysis
+    st.subheader("Score Trends")
+    trend_data = []
+    for h in history:
+        for func, score in h['scores'].items():
+            trend_data.append({
+                'Date': pd.to_datetime(h['timestamp']),
+                'Function': func.capitalize(),
+                'Score': score
+            })
+    
+    trend_df = pd.DataFrame(trend_data)
+    fig = px.line(
+        trend_df, 
+        x='Date', 
+        y='Score', 
+        color='Function',
+        title='Score Trends Over Time'
+    )
+    fig.update_layout(yaxis_range=[1, 4])
+    st.plotly_chart(fig)
+    
+    # Detailed History
+    st.subheader("Assessment History")
+    history_df = pd.DataFrame([
+        {
+            'Date': h['timestamp'],
+            'Tier': h['tier'],
+            'Confidence': f"{h['confidence']:.1%}",
+            'Average Score': sum(h['scores'].values())/len(h['scores']),
+            **{f"{k.capitalize()} Score": v for k, v in h['scores'].items()}
+        }
+        for h in history
+    ])
+    st.dataframe(history_df.sort_values('Date', ascending=False))
+def main():
+    """Main application function."""
+    st.title("NIST CSF 2.0 Cybersecurity Assessment System")
+    
+    # Description
+    st.markdown("""
+        This system provides AI-powered cybersecurity assessment using the NIST CSF 2.0 framework.
+        Upload Nessus scan results for detailed analysis, recommendations, and attack impact simulation.
+    """)
+    
+    # Initialize model if needed
+    if 'model' not in st.session_state:
+        st.session_state['model'] = NISTAssessmentModel()
+        st.session_state['model'].load_model()
+    
+    # System Stats
+    if hasattr(st.session_state['model'], 'history'):
+        total_assessments = len(st.session_state['model'].history)
+    else:
+        total_assessments = 0
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Assessments", total_assessments)
+    with col2:
+        st.metric("Model Iterations", st.session_state['model'].iterations)
+    with col3:
+        st.metric("Last Updated", datetime.now().strftime("%Y-%m-%d"))
+    
+    # Navigation
+    menu = ["Assessment", "Attack Simulation", "History", "Upload Files"]
+    choice = st.sidebar.selectbox("Select Function", menu)
+    
+    if choice == "Assessment":
+        show_assessment_section()
+    elif choice == "Attack Simulation":
+        show_simulation_section()
+    elif choice == "History":
+        show_history_section()
+    else:
+        show_upload_section()
 
 if __name__ == "__main__":
     main()
-                    
-        
